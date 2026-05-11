@@ -648,6 +648,215 @@ fn phase2_severity_levels_correct() {
     }
 }
 
+// ── Phase 3 tests ────────────────────────────────────────────────────────────
+
+// Test 33: BAT region file_offset not 1 MB aligned
+
+#[test]
+fn region_misaligned_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Patch RT1's BAT offset to a non-1MB-aligned value, re-CRC RT1.
+    image[RT1 + 32..RT1 + 40].copy_from_slice(&0x0030_0001u64.to_le_bytes());
+    recompute_rt_crc(&mut image, RT1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::RegionMisaligned {
+                region: "BAT",
+                file_offset: 0x0030_0001
+            }
+        )),
+        "expected RegionMisaligned(BAT), got: {issues:#?}"
+    );
+}
+
+// Test 34: region declared past end of container
+
+#[test]
+fn region_beyond_container_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Patch RT1's BAT offset to 1 GB (MB-aligned, beyond container).
+    image[RT1 + 32..RT1 + 40].copy_from_slice(&0x4000_0000u64.to_le_bytes());
+    recompute_rt_crc(&mut image, RT1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::RegionBeyondContainer { region: "BAT", .. }
+        )),
+        "expected RegionBeyondContainer(BAT), got: {issues:#?}"
+    );
+}
+
+// Test 35: BAT and Metadata regions overlap
+
+#[test]
+fn regions_overlap_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Set BAT offset to 0x300000 (same as Metadata) in both RT copies.
+    let meta_off: u64 = 0x0030_0000;
+    for rt in [RT1, RT2] {
+        image[rt + 32..rt + 40].copy_from_slice(&meta_off.to_le_bytes());
+        recompute_rt_crc(&mut image, rt);
+    }
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::RegionsOverlap { .. })),
+        "expected RegionsOverlap, got: {issues:#?}"
+    );
+}
+
+// Test 36: dirty log overlaps structural region
+
+#[test]
+fn log_overlaps_structural_region_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // LogOffset=0x100000 (Header zone), LogLength=1MB — 1MB aligned, in reserved zone.
+    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes());
+    image[H1 + 72..H1 + 80].copy_from_slice(&0x0010_0000u64.to_le_bytes());
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogOverlapsStructuralRegion { .. }
+        )),
+        "expected LogOverlapsStructuralRegion, got: {issues:#?}"
+    );
+}
+
+// Test 37: unknown required region in RT
+
+#[test]
+fn unknown_required_region_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Increment RT1 entry count to 3, add entry 2 with unknown GUID + Required=1.
+    image[RT1 + 8..RT1 + 12].copy_from_slice(&3u32.to_le_bytes()); // EntryCount=3
+    // Unknown GUID at entry 2 (base = 16 + 2*32 = 80).
+    image[RT1 + 80..RT1 + 96].fill(0xDE); // all 0xDE — not BAT or Metadata GUID
+    image[RT1 + 96..RT1 + 104].copy_from_slice(&0x0050_0000u64.to_le_bytes()); // file_offset
+    image[RT1 + 104..RT1 + 108].copy_from_slice(&0x0010_0000u32.to_le_bytes()); // length
+    image[RT1 + 108..RT1 + 112].copy_from_slice(&1u32.to_le_bytes()); // Required=1
+    recompute_rt_crc(&mut image, RT1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::UnknownRequiredRegion { .. }
+        )),
+        "expected UnknownRequiredRegion, got: {issues:#?}"
+    );
+}
+
+// Test 38: reserved bytes non-zero in RT header
+
+#[test]
+fn region_table_reserved_header_nonzero_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Bytes 12-15 of RT1 are reserved; set to 1.
+    image[RT1 + 12..RT1 + 16].copy_from_slice(&1u32.to_le_bytes());
+    recompute_rt_crc(&mut image, RT1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::RegionTableReservedNonZero {
+                copy: 1,
+                location: "header",
+                value: 1,
+            }
+        )),
+        "expected RegionTableReservedNonZero(header), got: {issues:#?}"
+    );
+}
+
+// Test 39: reserved bits non-zero in RT entry Required field
+
+#[test]
+fn region_table_reserved_entry_nonzero_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // RT1 entry 0 Required field is at offset 16 + 28 = 44 within RT1.
+    // Set bit 1 (reserved). Bit 0 (Required) remains 1.
+    let curr = u32::from_le_bytes(image[RT1 + 44..RT1 + 48].try_into().unwrap());
+    image[RT1 + 44..RT1 + 48].copy_from_slice(&(curr | 0x0000_0002).to_le_bytes());
+    recompute_rt_crc(&mut image, RT1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::RegionTableReservedNonZero {
+                copy: 1,
+                location: "entry",
+                ..
+            }
+        )),
+        "expected RegionTableReservedNonZero(entry), got: {issues:#?}"
+    );
+}
+
+// Test 40: Phase 3 severity levels
+
+#[test]
+fn phase3_severity_levels_correct() {
+    use Severity::*;
+    let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
+        (
+            VhdxIntegrityAnomaly::RegionMisaligned {
+                region: "BAT",
+                file_offset: 1,
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::RegionBeyondContainer {
+                region: "BAT",
+                declared_end: 0,
+                container_size: 0,
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::RegionsOverlap {
+                region_a: "BAT",
+                region_b: "Metadata",
+                overlap_offset: 0,
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogOverlapsStructuralRegion {
+                log_offset: 0,
+                overlapping: "Header",
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::UnknownRequiredRegion {
+                guid_hex: String::new(),
+            },
+            Warning,
+        ),
+        (
+            VhdxIntegrityAnomaly::RegionTableReservedNonZero {
+                copy: 1,
+                location: "header",
+                value: 1,
+            },
+            Warning,
+        ),
+    ];
+    for (anomaly, expected) in checks {
+        assert_eq!(
+            &anomaly.severity(),
+            expected,
+            "severity mismatch for {anomaly:?}"
+        );
+    }
+}
+
 // ── Test 20: severity levels are consistent ───────────────────────────────────
 
 #[test]

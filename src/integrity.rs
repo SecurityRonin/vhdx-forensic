@@ -146,6 +146,43 @@ pub enum VhdxIntegrityAnomaly {
     /// consistent view but is out of scope for offline forensic analysis.
     DirtyLog { log_length: u32, log_offset: u64 },
 
+    // ── Region layout anomalies (Phase 3) ────────────────────────────────────
+    /// A region entry's file_offset is not 1 MB aligned. All VHDX regions
+    /// must start at 1 MB boundaries; misalignment indicates manual patching.
+    RegionMisaligned {
+        region: &'static str,
+        file_offset: u64,
+    },
+    /// A region entry's file_offset + length extends past the container end.
+    RegionBeyondContainer {
+        region: &'static str,
+        declared_end: u64,
+        container_size: u64,
+    },
+    /// Two declared regions (BAT, Metadata) have overlapping byte ranges.
+    RegionsOverlap {
+        region_a: &'static str,
+        region_b: &'static str,
+        overlap_offset: u64,
+    },
+    /// The dirty-log region overlaps a structural zone (FileIdentifier, Header,
+    /// or RegionTable). Log replay would overwrite VHDX structural data.
+    LogOverlapsStructuralRegion {
+        log_offset: u64,
+        overlapping: &'static str,
+    },
+    /// A region entry has Required=1 with a GUID that is neither BAT nor
+    /// Metadata. Hyper-V refuses to open such files — cannot be legitimate.
+    UnknownRequiredRegion { guid_hex: String },
+    /// Reserved bytes in the region table header (bytes 12–15) or in a region
+    /// entry's Required field (bits 1–31) are non-zero.
+    RegionTableReservedNonZero {
+        copy: u8,
+        /// `"header"` or `"entry"`
+        location: &'static str,
+        value: u32,
+    },
+
     // ── Region table CRC32C integrity ─────────────────────────────────────────
     /// One region table copy has a CRC32C mismatch.
     RegionTableChecksumMismatch {
@@ -251,6 +288,13 @@ impl VhdxIntegrityAnomaly {
             | Self::SequenceNumbersIdentical { .. }
             | Self::TrailingData { .. }
             | Self::CreatorStringAnomalous { .. } => Severity::Warning,
+            Self::RegionMisaligned { .. }
+            | Self::RegionBeyondContainer { .. }
+            | Self::RegionsOverlap { .. }
+            | Self::LogOverlapsStructuralRegion { .. } => Severity::Error,
+            Self::UnknownRequiredRegion { .. } | Self::RegionTableReservedNonZero { .. } => {
+                Severity::Warning
+            }
             Self::FileWriteGuidAllZeros
             | Self::DataWriteGuidAllZeros
             | Self::LogGuidWithNoLog { .. }
