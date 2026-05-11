@@ -370,6 +370,28 @@ pub enum VhdxIntegrityAnomaly {
     /// The creator string at the File Identifier section contains an anomaly
     /// inconsistent with legitimate tools.
     CreatorStringAnomalous { anomaly: &'static str },
+
+    // ── Container / File Identifier refinements (Phase 7) ────────────────────
+    /// Non-zero bytes exist in the reserved area of the File Identifier
+    /// section (bytes 512–65535, after the creator string). Normal parsers
+    /// skip this area entirely — it is a low-visibility location for
+    /// data hiding or steganographic payloads.
+    FileIdentifierReservedNonZero { start_offset: u64, nonzero_count: u64 },
+    /// Non-zero bytes exist in a gap between two adjacent structural regions
+    /// (e.g. the padding between Header1 and Header2, or between Region
+    /// Table2 and the first user region). Hyper-V zeros these gaps at creation;
+    /// non-zero content indicates data hiding or a partial-write artifact.
+    InterRegionGapNonZero {
+        from_region: &'static str,
+        to_region: &'static str,
+        gap_offset: u64,
+        gap_size: u64,
+    },
+    /// Non-zero bytes exist in the reserved portion (bytes 80–4095) of a
+    /// valid header copy. These bytes are CRC-protected but not semantically
+    /// defined — an attacker can write data there and update the CRC to
+    /// produce a structurally valid header that carries hidden content.
+    HeaderReservedNonZero { copy: u8, offset_in_header: u16, length: u16 },
 }
 
 impl VhdxIntegrityAnomaly {
@@ -439,6 +461,10 @@ impl VhdxIntegrityAnomaly {
             | Self::MissingParentLocator
             | Self::VirtualDiskSizeOverreported { .. } => Severity::Error,
             Self::LeaveBlocksAllocatedSet => Severity::Warning,
+            Self::FileIdentifierReservedNonZero { .. } | Self::HeaderReservedNonZero { .. } => {
+                Severity::Warning
+            }
+            Self::InterRegionGapNonZero { .. } => Severity::Info,
         }
     }
 }

@@ -1440,6 +1440,108 @@ fn phase6_severity_levels_correct() {
     }
 }
 
+// ── Phase 7 tests — Container / File Identifier refinements ──────────────────
+
+// File Identifier section: bytes 0..1MB.
+//   [0..8]    "vhdxfile" magic
+//   [8..512]  creator string (504 bytes, null-padded)
+//   [512..65536] reserved (must be zero per MS-VHDX §2.1.2)
+
+// Test 62: non-zero bytes in the reserved area of the File Identifier section
+
+#[test]
+fn file_identifier_reserved_nonzero_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Write a non-zero byte at offset 512 (start of reserved area).
+    image[512] = 0xFF;
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::FileIdentifierReservedNonZero { .. })),
+        "expected FileIdentifierReservedNonZero, got: {issues:#?}"
+    );
+}
+
+// Test 63: non-zero bytes in the gap between structural regions
+// Gap between H1 (4096 bytes at 0x100000) and H2 (at 0x140000): 0x101000..0x140000.
+
+#[test]
+fn inter_region_gap_nonzero_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Write a non-zero byte in the gap between Header1 and Header2.
+    // H1 occupies bytes [0x100000..0x101000] (4096-byte header).
+    // The gap is [0x101000..0x140000].
+    image[0x101000] = 0xAB;
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::InterRegionGapNonZero { .. })),
+        "expected InterRegionGapNonZero, got: {issues:#?}"
+    );
+}
+
+// Test 64: non-zero bytes in the reserved portion of a valid header copy
+// Header reserved area is bytes [80..4096] within the 4096-byte header block.
+
+#[test]
+fn header_reserved_nonzero_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Write non-zero data in H1's reserved area (H1 = 0x100000..0x101000).
+    image[H1 + 80..H1 + 84].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+    // Recompute H1 CRC so the header remains structurally valid.
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::HeaderReservedNonZero { copy: 1, .. }
+        )),
+        "expected HeaderReservedNonZero(copy=1), got: {issues:#?}"
+    );
+}
+
+// Test 65: Phase 7 severity levels
+
+#[test]
+fn phase7_severity_levels_correct() {
+    use Severity::*;
+    let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
+        (
+            VhdxIntegrityAnomaly::FileIdentifierReservedNonZero {
+                start_offset: 512,
+                nonzero_count: 1,
+            },
+            Warning,
+        ),
+        (
+            VhdxIntegrityAnomaly::InterRegionGapNonZero {
+                from_region: "Header1",
+                to_region: "Header2",
+                gap_offset: 0x101000,
+                gap_size: 1,
+            },
+            Info,
+        ),
+        (
+            VhdxIntegrityAnomaly::HeaderReservedNonZero {
+                copy: 1,
+                offset_in_header: 80,
+                length: 4,
+            },
+            Warning,
+        ),
+    ];
+    for (anomaly, expected) in checks {
+        assert_eq!(
+            &anomaly.severity(),
+            expected,
+            "severity mismatch for {anomaly:?}"
+        );
+    }
+}
+
 // ── Test 20: severity levels are consistent ───────────────────────────────────
 
 #[test]
