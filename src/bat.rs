@@ -10,7 +10,7 @@ pub struct Bat {
     entries: Vec<u64>,
     meta: VhdxMetadata,
     #[allow(dead_code)]
-    bat_region_offset: u64,
+    region_offset: u64,
 }
 
 impl Bat {
@@ -30,7 +30,7 @@ impl Bat {
         Ok(Self {
             entries,
             meta,
-            bat_region_offset: bat_offset,
+            region_offset: bat_offset,
         })
     }
 

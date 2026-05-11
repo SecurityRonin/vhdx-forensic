@@ -32,21 +32,16 @@ pub struct VhdxMetadata {
 }
 
 impl VhdxMetadata {
-    /// Number of data blocks that cover the virtual disk.
-    pub fn data_block_count(&self) -> u64 {
-        self.virtual_disk_size.div_ceil(u64::from(self.block_size))
-    }
-
     /// Chunk ratio: how many data block BAT entries precede each sector bitmap entry.
-    /// Formula from MS-VHDX §2.3.5: (2^23 * LogicalSectorSize) / BlockSize.
+    /// Formula from MS-VHDX §2.3.5: `(2^23 * LogicalSectorSize) / BlockSize`.
     pub fn chunk_ratio(&self) -> u64 {
         (1u64 << 23) * u64::from(self.logical_sector_size) / u64::from(self.block_size)
     }
 
     /// Validate all metadata fields against MS-VHDX spec bounds.
     ///
-    /// Must be called before any arithmetic that uses block_size or
-    /// logical_sector_size to prevent divide-by-zero and range violations.
+    /// Must be called before any arithmetic that uses `block_size` or
+    /// `logical_sector_size` to prevent divide-by-zero and range violations.
     pub fn validate(&self) -> Result<()> {
         if self.block_size < BLOCK_SIZE_MIN || self.block_size > BLOCK_SIZE_MAX {
             return Err(VhdxError::InvalidMetadata(

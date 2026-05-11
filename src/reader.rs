@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::bat::Bat;
 use crate::error::{Result, VhdxError};
-use crate::header::{parse_active_header, HEADER1_OFFSET, REGION_TABLE1_OFFSET};
+use crate::header::{parse_active_header, REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET};
 use crate::metadata::{parse_metadata, VhdxMetadata};
 use crate::region::parse_region_table;
 use crate::FILE_MAGIC;
@@ -51,7 +51,7 @@ impl VhdxReader {
 
         // 4. Parse region table (try primary, then backup).
         let regions = parse_region_table(&data, REGION_TABLE1_OFFSET as usize)
-            .or_else(|_| parse_region_table(&data, 0x0024_0000))?;
+            .or_else(|_| parse_region_table(&data, REGION_TABLE2_OFFSET as usize))?;
 
         // 5. Parse and validate metadata.
         let meta = parse_metadata(&data, regions.metadata.file_offset, regions.metadata.length)?;
@@ -120,7 +120,7 @@ impl Read for VhdxReader {
                     // Sparse/not-present blocks read as zero (same as Windows behavior).
                     buf[written..written + this_chunk].fill(0);
                 }
-                Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+                Err(e) => return Err(io::Error::other(e.to_string())),
             }
             written += this_chunk;
         }

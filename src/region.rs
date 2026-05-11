@@ -16,6 +16,7 @@ pub const METADATA_GUID: [u8; 16] = [
 
 #[derive(Debug, Clone)]
 pub struct RegionEntry {
+    #[allow(dead_code)]
     pub guid: [u8; 16],
     pub file_offset: u64,
     pub length: u32,

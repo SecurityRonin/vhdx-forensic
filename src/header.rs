@@ -1,11 +1,10 @@
 use crate::error::{Result, VhdxError};
 
 /// Offsets per MS-VHDX spec §2.
-pub const FILE_ID_OFFSET: u64 = 0;
 pub const HEADER1_OFFSET: u64 = 0x0010_0000; // 1 MB
 pub const HEADER2_OFFSET: u64 = 0x0014_0000; // 1 MB + 256 KB
 pub const REGION_TABLE1_OFFSET: u64 = 0x0020_0000; // 2 MB
-pub const REGION_TABLE2_OFFSET: u64 = 0x0024_0000; // 2 MB + 256 KB
+pub const REGION_TABLE2_OFFSET: u64 = 0x0024_0000; // 2 MB + 256 KB (backup)
 
 pub const HEADER_SIGNATURE: &[u8; 4] = b"head";
 pub const HEADER_SIZE: usize = 4096;
@@ -14,7 +13,9 @@ pub const HEADER_SIZE: usize = 4096;
 #[derive(Debug, Clone)]
 pub struct VhdxHeader {
     pub sequence_number: u64,
+    #[allow(dead_code)]
     pub log_offset: u64,
+    #[allow(dead_code)]
     pub log_length: u32,
 }
 
