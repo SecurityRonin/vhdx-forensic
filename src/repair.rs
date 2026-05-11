@@ -87,7 +87,9 @@ impl VhdxRepair {
         let mut repaired = Vec::new();
         let mut cannot_repair = Vec::new();
 
-        let issues = VhdxIntegrity::new(&self.data).analyse();
+        let integrity = VhdxIntegrity::new(&self.data);
+        let mut issues = integrity.analyse();
+        issues.extend(integrity.check_bat_ghost_data());
 
         for issue in issues {
             // Capture booleans / Copy fields before the match borrows `issue`.
@@ -117,6 +119,33 @@ impl VhdxRepair {
                         false
                     }
                 }
+                VhdxIntegrityAnomaly::BatEntryInStructuralRegion { bat_index, .. } => {
+                    let idx = *bat_index;
+                    if let Some(off) = VhdxIntegrity::new(&self.data).bat_region_offset() {
+                        repaired.push(self.zero_bat_entry(off, idx));
+                        true
+                    } else {
+                        false
+                    }
+                }
+                VhdxIntegrityAnomaly::UndefinedBlockState { bat_index } => {
+                    let idx = *bat_index;
+                    if let Some(off) = VhdxIntegrity::new(&self.data).bat_region_offset() {
+                        repaired.push(self.zero_bat_entry(off, idx));
+                        true
+                    } else {
+                        false
+                    }
+                }
+                VhdxIntegrityAnomaly::BatEntryUnaligned { bat_index, .. } => {
+                    let idx = *bat_index;
+                    if let Some(off) = VhdxIntegrity::new(&self.data).bat_region_offset() {
+                        repaired.push(self.clear_bat_reserved_bits(off, idx));
+                        true
+                    } else {
+                        false
+                    }
+                }
                 _ => false,
             };
 
@@ -132,6 +161,26 @@ impl VhdxRepair {
                         "Log replay is required to reach a consistent image state; \
                         log replay is out of scope for offline forensic analysis — \
                         mount the image on a running Hyper-V host for automatic replay"
+                    }
+                    VhdxIntegrityAnomaly::BatSizeMetadataMismatch { .. } => {
+                        "Cannot determine which field (VirtualDiskSize or BlockSize) was \
+                        altered without an external reference; altering either would destroy evidence"
+                    }
+                    VhdxIntegrityAnomaly::LogEntryGuidMismatch { .. } => {
+                        "Log was transplanted from a different image; replay would overwrite \
+                        this image's metadata with data from the source image"
+                    }
+                    VhdxIntegrityAnomaly::GhostDataInAbsentBlock { .. } => {
+                        "Absent-block data cannot be zeroed without destroying evidence; \
+                        use a carver to extract the content before repair"
+                    }
+                    VhdxIntegrityAnomaly::MetadataItemsOverlap { .. } => {
+                        "Overlapping metadata items are ambiguous; cannot determine which \
+                        item's data is authoritative without external reference"
+                    }
+                    VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog { .. } => {
+                        "Log structure is internally contradictory; replay is unsafe and \
+                        clearing the log would destroy evidence of the anomaly"
                     }
                     VhdxIntegrityAnomaly::BatEntriesOverlap { .. } => {
                         "Overlapping BAT entries are ambiguous; cannot determine which \
@@ -232,6 +281,23 @@ impl VhdxRepair {
             bytes_changed: REGION_TABLE_CRC_COVERAGE,
             disclaimer: "Region table copy was replaced with the other valid copy. \
                 The original corrupt copy may have contained forensically significant modifications.",
+        }
+    }
+
+    fn clear_bat_reserved_bits(&mut self, bat_offset: u64, bat_index: usize) -> RepairAction {
+        let byte_pos = bat_offset as usize + bat_index * 8;
+        let raw = u64::from_le_bytes(self.data[byte_pos..byte_pos + 8].try_into().unwrap());
+        let cleaned = raw & !0x000F_FFF8u64;
+        self.data[byte_pos..byte_pos + 8].copy_from_slice(&cleaned.to_le_bytes());
+        RepairAction {
+            description: format!(
+                "BAT entry {bat_index} had non-zero reserved bits — bits [3..19] cleared, \
+                offset and state preserved"
+            ),
+            byte_offset: byte_pos as u64,
+            bytes_changed: 8,
+            disclaimer: "Reserved bits cleared; payload offset preserved. \
+                The original reserved-bit pattern may have been forensically significant.",
         }
     }
 
