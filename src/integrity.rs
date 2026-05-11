@@ -1,6 +1,6 @@
 use crate::header::{
-    crc32c, HEADER1_OFFSET, HEADER2_OFFSET, HEADER_SIGNATURE, HEADER_SIZE,
-    REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET,
+    crc32c, HEADER1_OFFSET, HEADER2_OFFSET, HEADER_SIGNATURE, HEADER_SIZE, REGION_TABLE1_OFFSET,
+    REGION_TABLE2_OFFSET,
 };
 use crate::metadata::{
     GUID_FILE_PARAMETERS, GUID_LOGICAL_SECTOR_SIZE, GUID_VIRTUAL_DISK_SIZE,
@@ -54,7 +54,11 @@ pub enum VhdxIntegrityAnomaly {
 
     // ── Header CRC32C integrity ───────────────────────────────────────────────
     /// One header copy has a CRC32C mismatch — content was modified after the last write.
-    HeaderChecksumMismatch { copy: u8, computed: u32, stored: u32 },
+    HeaderChecksumMismatch {
+        copy: u8,
+        computed: u32,
+        stored: u32,
+    },
     /// Both header copies have invalid CRC32C — header region is unreadable.
     BothHeaderCopiesInvalid,
 
@@ -81,7 +85,11 @@ pub enum VhdxIntegrityAnomaly {
 
     // ── Region table CRC32C integrity ─────────────────────────────────────────
     /// One region table copy has a CRC32C mismatch.
-    RegionTableChecksumMismatch { copy: u8, computed: u32, stored: u32 },
+    RegionTableChecksumMismatch {
+        copy: u8,
+        computed: u32,
+        stored: u32,
+    },
     /// Both region table copies have invalid CRC32C — region layout is unreadable.
     BothRegionTableCopiesInvalid,
     /// The same BAT or Metadata region field has a different value in RT1 vs RT2
@@ -97,11 +105,17 @@ pub enum VhdxIntegrityAnomaly {
     /// A required metadata item (BlockSize, VirtualDiskSize) is absent.
     MetadataMissing(&'static str),
     /// BlockSize is outside the spec range [1 MB, 256 MB] or not a power of two.
-    BlockSizeInvalid { block_size: u32, reason: &'static str },
+    BlockSizeInvalid {
+        block_size: u32,
+        reason: &'static str,
+    },
     /// LogicalSectorSize is not 512 or 4096.
     LogicalSectorSizeInvalid { sector_size: u32 },
     /// VirtualDiskSize is zero, exceeds 64 TiB, or is not a multiple of sector size.
-    VirtualDiskSizeInvalid { vdisk_size: u64, reason: &'static str },
+    VirtualDiskSizeInvalid {
+        vdisk_size: u64,
+        reason: &'static str,
+    },
     /// The declared VirtualDiskSize is smaller than the actual range covered by the
     /// present BAT entries — data beyond the declared size is hidden.
     VirtualDiskSizeUnderreported { declared: u64, bat_coverage: u64 },
@@ -199,10 +213,7 @@ impl<'a> VhdxIntegrity<'a> {
 
         // Layer 1: container-level checks (fast gate).
         issues.extend(self.check_file_magic());
-        if issues
-            .iter()
-            .any(|a| a.severity() == Severity::Critical)
-        {
+        if issues.iter().any(|a| a.severity() == Severity::Critical) {
             return issues; // nothing more can be decoded
         }
 
@@ -213,12 +224,10 @@ impl<'a> VhdxIntegrity<'a> {
         issues.extend(self.check_region_tables());
 
         // Layer 4-6 require the region tables to be readable.
-        if issues.iter().any(|a| {
-            matches!(
-                a,
-                VhdxIntegrityAnomaly::BothRegionTableCopiesInvalid
-            )
-        }) {
+        if issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::BothRegionTableCopiesInvalid))
+        {
             return issues;
         }
 
@@ -332,12 +341,16 @@ impl<'a> VhdxIntegrity<'a> {
         let start = meta_off as usize;
         let end = start + meta_len as usize;
         if self.data.len() < end + 0x10000 + 20 {
-            issues.push(VhdxIntegrityAnomaly::MetadataMissing("region out of bounds"));
+            issues.push(VhdxIntegrityAnomaly::MetadataMissing(
+                "region out of bounds",
+            ));
             return issues;
         }
         let region = &self.data[start..end];
         if region.len() < 8 || &region[0..8] != METADATA_TABLE_SIGNATURE {
-            issues.push(VhdxIntegrityAnomaly::MetadataMissing("bad metadata signature"));
+            issues.push(VhdxIntegrityAnomaly::MetadataMissing(
+                "bad metadata signature",
+            ));
             return issues;
         }
 
@@ -371,11 +384,9 @@ impl<'a> VhdxIntegrity<'a> {
                 let flags = u32::from_le_bytes(item_data[4..8].try_into().unwrap());
                 has_parent = flags & 2 != 0;
             } else if guid == GUID_VIRTUAL_DISK_SIZE && item_data.len() >= 8 {
-                virtual_disk_size =
-                    Some(u64::from_le_bytes(item_data[0..8].try_into().unwrap()));
+                virtual_disk_size = Some(u64::from_le_bytes(item_data[0..8].try_into().unwrap()));
             } else if guid == GUID_LOGICAL_SECTOR_SIZE && item_data.len() >= 4 {
-                logical_sector_size =
-                    Some(u32::from_le_bytes(item_data[0..4].try_into().unwrap()));
+                logical_sector_size = Some(u32::from_le_bytes(item_data[0..4].try_into().unwrap()));
             }
         }
 
@@ -465,11 +476,10 @@ impl<'a> VhdxIntegrity<'a> {
 
         for i in 0..entry_count {
             let entry_pos = bat_start + i * 8;
-            let raw = u64::from_le_bytes(
-                self.data[entry_pos..entry_pos + 8].try_into().unwrap(),
-            );
+            let raw = u64::from_le_bytes(self.data[entry_pos..entry_pos + 8].try_into().unwrap());
             let state = (raw & 0b111) as u8;
-            let is_bitmap_slot = chunk_ratio < u64::MAX && (i as u64 % (chunk_ratio + 1)) == chunk_ratio;
+            let is_bitmap_slot =
+                chunk_ratio < u64::MAX && (i as u64 % (chunk_ratio + 1)) == chunk_ratio;
 
             if is_bitmap_slot {
                 // Sector bitmap entry: only 0 (not present) and 6 (present) are valid.
@@ -713,15 +723,13 @@ impl<'a> VhdxIntegrity<'a> {
     fn check_region_table_pair(&self) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
 
-        let rt1 = &self.data
-            [REGION_TABLE1_OFFSET as usize..REGION_TABLE1_OFFSET as usize + REGION_TABLE_CRC_COVERAGE];
-        let rt2 = &self.data
-            [REGION_TABLE2_OFFSET as usize..REGION_TABLE2_OFFSET as usize + REGION_TABLE_CRC_COVERAGE];
+        let rt1 = &self.data[REGION_TABLE1_OFFSET as usize
+            ..REGION_TABLE1_OFFSET as usize + REGION_TABLE_CRC_COVERAGE];
+        let rt2 = &self.data[REGION_TABLE2_OFFSET as usize
+            ..REGION_TABLE2_OFFSET as usize + REGION_TABLE_CRC_COVERAGE];
 
-        let count1 =
-            (u32::from_le_bytes(rt1[8..12].try_into().unwrap()) as usize).min(2048);
-        let count2 =
-            (u32::from_le_bytes(rt2[8..12].try_into().unwrap()) as usize).min(2048);
+        let count1 = (u32::from_le_bytes(rt1[8..12].try_into().unwrap()) as usize).min(2048);
+        let count2 = (u32::from_le_bytes(rt2[8..12].try_into().unwrap()) as usize).min(2048);
         let count = count1.min(count2);
 
         for i in 0..count {
@@ -741,7 +749,7 @@ impl<'a> VhdxIntegrity<'a> {
             } else if guid1 == METADATA_GUID {
                 "Metadata"
             } else {
-                continue
+                continue;
             };
 
             let off1 = u64::from_le_bytes(rt1[base + 16..base + 24].try_into().unwrap());
@@ -777,12 +785,10 @@ impl<'a> VhdxIntegrity<'a> {
         let h2_ok = self.check_single_header_crc(2).is_none();
         match (h1_ok, h2_ok) {
             (true, true) => {
-                let seq1 = u64::from_le_bytes(
-                    self.data[h1_off + 8..h1_off + 16].try_into().unwrap(),
-                );
-                let seq2 = u64::from_le_bytes(
-                    self.data[h2_off + 8..h2_off + 16].try_into().unwrap(),
-                );
+                let seq1 =
+                    u64::from_le_bytes(self.data[h1_off + 8..h1_off + 16].try_into().unwrap());
+                let seq2 =
+                    u64::from_le_bytes(self.data[h2_off + 8..h2_off + 16].try_into().unwrap());
                 if seq1 >= seq2 {
                     Some(&self.data[h1_off..h1_off + HEADER_SIZE])
                 } else {
@@ -877,7 +883,9 @@ impl<'a> VhdxIntegrity<'a> {
             let mut guid = [0u8; 16];
             guid.copy_from_slice(&rt[base..base + 16]);
             if guid == BAT_GUID {
-                return Some(u32::from_le_bytes(rt[base + 24..base + 28].try_into().unwrap()));
+                return Some(u32::from_le_bytes(
+                    rt[base + 24..base + 28].try_into().unwrap(),
+                ));
             }
         }
         None

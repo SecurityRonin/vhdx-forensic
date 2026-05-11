@@ -6,8 +6,9 @@
 
 mod builder;
 
-use vhdx_forensic::{VhdxIntegrity, VhdxIntegrityAnomaly, VhdxRepair, RepairReport, VhdxReader,
-                   crc32c};
+use vhdx_forensic::{
+    crc32c, RepairReport, VhdxIntegrity, VhdxIntegrityAnomaly, VhdxReader, VhdxRepair,
+};
 
 fn recompute_header_crc(buf: &mut [u8], header_off: usize) {
     buf[header_off + 4..header_off + 8].fill(0);
@@ -36,7 +37,10 @@ fn repair_single_bad_header1_crc() {
     let repaired = repair.into_bytes();
     let issues = VhdxIntegrity::new(&repaired).analyse();
     assert!(
-        !issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 1, .. })),
+        !issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 1, .. }
+        )),
         "HeaderChecksumMismatch for copy 1 should be resolved after repair, remaining: {issues:#?}"
     );
 }
@@ -100,10 +104,10 @@ fn cannot_repair_both_headers_invalid() {
     let mut repair = VhdxRepair::new(image);
     let report = repair.attempt_repair();
     assert!(
-        report.cannot_repair.iter().any(|c| matches!(
-            c.anomaly,
-            VhdxIntegrityAnomaly::BothHeaderCopiesInvalid
-        )),
+        report
+            .cannot_repair
+            .iter()
+            .any(|c| matches!(c.anomaly, VhdxIntegrityAnomaly::BothHeaderCopiesInvalid)),
         "BothHeaderCopiesInvalid should appear in cannot_repair, got: {report:#?}"
     );
 }
@@ -144,7 +148,7 @@ fn repair_action_has_disclaimer() {
 fn repaired_image_opens_in_reader() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
     image[H1 + 16] ^= 0xFF; // break H1 CRC
-    // Confirm the integrity analyser detects the anomaly.
+                            // Confirm the integrity analyser detects the anomaly.
     let pre_issues = VhdxIntegrity::new(&image).analyse();
     assert!(
         pre_issues.iter().any(|a| matches!(
@@ -183,10 +187,10 @@ fn dirty_log_cannot_repair_because_replay_out_of_scope() {
     let report = repair.attempt_repair();
     // DirtyLog should be listed as cannot_repair (log replay is out of scope).
     assert!(
-        report.cannot_repair.iter().any(|c| matches!(
-            c.anomaly,
-            VhdxIntegrityAnomaly::DirtyLog { .. }
-        )),
+        report
+            .cannot_repair
+            .iter()
+            .any(|c| matches!(c.anomaly, VhdxIntegrityAnomaly::DirtyLog { .. })),
         "DirtyLog should appear in cannot_repair, got: {report:#?}"
     );
     // The reason should be non-empty.

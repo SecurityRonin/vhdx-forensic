@@ -23,8 +23,8 @@ mod header;
 pub mod integrity;
 mod metadata;
 mod reader;
-pub mod repair;
 mod region;
+pub mod repair;
 
 pub use error::{Result, VhdxError};
 pub use header::crc32c;

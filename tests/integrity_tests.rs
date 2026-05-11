@@ -8,7 +8,7 @@
 
 mod builder;
 
-use vhdx_forensic::{VhdxIntegrity, VhdxIntegrityAnomaly, Severity, crc32c};
+use vhdx_forensic::{crc32c, Severity, VhdxIntegrity, VhdxIntegrityAnomaly};
 
 // ── CRC helper ───────────────────────────────────────────────────────────────
 
@@ -53,7 +53,9 @@ fn bad_magic_detected() {
     image[0..8].copy_from_slice(b"notvalid");
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::BadMagic { .. })),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::BadMagic { .. })),
         "expected BadMagic, got: {issues:#?}"
     );
 }
@@ -65,7 +67,9 @@ fn truncated_container_detected() {
     let image = vec![0u8; 512]; // way too small
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::ContainerTruncated { .. })),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::ContainerTruncated { .. })),
         "expected ContainerTruncated, got: {issues:#?}"
     );
 }
@@ -82,9 +86,10 @@ fn header1_crc_mismatch_detected() {
     image[H1 + 16] ^= 0xFF;
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues
-            .iter()
-            .any(|a| matches!(a, VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 1, .. })),
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 1, .. }
+        )),
         "expected HeaderChecksumMismatch(copy=1), got: {issues:#?}"
     );
 }
@@ -97,9 +102,10 @@ fn header2_crc_mismatch_detected() {
     image[H2 + 16] ^= 0xFF;
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues
-            .iter()
-            .any(|a| matches!(a, VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 2, .. })),
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 2, .. }
+        )),
         "expected HeaderChecksumMismatch(copy=2), got: {issues:#?}"
     );
 }
@@ -170,9 +176,13 @@ fn dirty_log_detected() {
     recompute_header_crc(&mut image, H1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues
-            .iter()
-            .any(|a| matches!(a, VhdxIntegrityAnomaly::DirtyLog { log_length: 512, .. })),
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::DirtyLog {
+                log_length: 512,
+                ..
+            }
+        )),
         "expected DirtyLog(log_length=512), got: {issues:#?}"
     );
 }
@@ -205,7 +215,11 @@ fn region_table_copy_mismatch_detected() {
     // RT1 entry 0 (BAT) file_offset is at RT1 + 16 + 16 = RT1 + 32.
     // Read current value, then write a different one into RT2.
     let rt2_bat_entry_off = RT2 + 32;
-    let current = u64::from_le_bytes(image[rt2_bat_entry_off..rt2_bat_entry_off + 8].try_into().unwrap());
+    let current = u64::from_le_bytes(
+        image[rt2_bat_entry_off..rt2_bat_entry_off + 8]
+            .try_into()
+            .unwrap(),
+    );
     image[rt2_bat_entry_off..rt2_bat_entry_off + 8]
         .copy_from_slice(&(current + 0x0010_0000).to_le_bytes());
     recompute_rt_crc(&mut image, RT2);
@@ -227,9 +241,10 @@ fn metadata_block_size_zero_detected() {
         .build();
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues
-            .iter()
-            .any(|a| matches!(a, VhdxIntegrityAnomaly::BlockSizeInvalid { block_size: 0, .. })),
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::BlockSizeInvalid { block_size: 0, .. }
+        )),
         "expected BlockSizeInvalid(0), got: {issues:#?}"
     );
 }
@@ -243,10 +258,9 @@ fn metadata_block_size_not_power_of_two_detected() {
         .build();
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::BlockSizeInvalid { .. }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::BlockSizeInvalid { .. })),
         "expected BlockSizeInvalid (not power-of-two), got: {issues:#?}"
     );
 }
@@ -294,7 +308,9 @@ fn differencing_disk_detected() {
         .build();
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::DifferencingDisk)),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::DifferencingDisk)),
         "expected DifferencingDisk, got: {issues:#?}"
     );
 }
@@ -343,7 +359,9 @@ fn bat_entries_overlap_detected() {
         .build();
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::BatEntriesOverlap { .. })),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::BatEntriesOverlap { .. })),
         "expected BatEntriesOverlap, got: {issues:#?}"
     );
 }

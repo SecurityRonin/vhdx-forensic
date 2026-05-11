@@ -1,5 +1,6 @@
-use crate::header::{crc32c, HEADER1_OFFSET, HEADER2_OFFSET, HEADER_SIZE,
-                    REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET};
+use crate::header::{
+    crc32c, HEADER1_OFFSET, HEADER2_OFFSET, HEADER_SIZE, REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET,
+};
 use crate::integrity::{VhdxIntegrity, VhdxIntegrityAnomaly};
 
 const REGION_TABLE_CRC_COVERAGE: usize = 65536;
@@ -152,11 +153,17 @@ impl VhdxRepair {
                     }
                     _ => "No automated repair strategy is available for this anomaly type",
                 };
-                cannot_repair.push(CannotRepair { anomaly: issue, reason });
+                cannot_repair.push(CannotRepair {
+                    anomaly: issue,
+                    reason,
+                });
             }
         }
 
-        RepairReport { repaired, cannot_repair }
+        RepairReport {
+            repaired,
+            cannot_repair,
+        }
     }
 
     /// Consume the repair context and return the (possibly modified) image bytes.
@@ -210,8 +217,7 @@ impl VhdxRepair {
         } else {
             REGION_TABLE2_OFFSET as usize
         };
-        let src_bytes: Vec<u8> =
-            self.data[src_off..src_off + REGION_TABLE_CRC_COVERAGE].to_vec();
+        let src_bytes: Vec<u8> = self.data[src_off..src_off + REGION_TABLE_CRC_COVERAGE].to_vec();
         self.data[dst_off..dst_off + REGION_TABLE_CRC_COVERAGE].copy_from_slice(&src_bytes);
         self.data[dst_off + 4..dst_off + 8].fill(0);
         let mut crc_buf = self.data[dst_off..dst_off + REGION_TABLE_CRC_COVERAGE].to_vec();
