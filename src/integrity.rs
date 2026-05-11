@@ -1098,7 +1098,7 @@ impl<'a> VhdxIntegrity<'a> {
         let mut has_parent_locator = false;
 
         let meta_start = meta_offset as usize;
-        let meta_table_end = meta_start + meta_length as usize;
+        let meta_table_end = meta_start.saturating_add(meta_length as usize);
         if self.data.len() >= meta_table_end && meta_length >= 8 {
             let region = &self.data[meta_start..meta_table_end];
             if &region[..8] == METADATA_TABLE_SIGNATURE {
@@ -1218,7 +1218,7 @@ impl<'a> VhdxIntegrity<'a> {
 
         // Scan metadata item entries for overlap and out-of-range conditions.
         let meta_start = r.meta_offset as usize;
-        let meta_end = meta_start + r.meta_length as usize;
+        let meta_end = meta_start.saturating_add(r.meta_length as usize);
         if self.data.len() >= meta_end && r.meta_length >= 8 {
             let region = &self.data[meta_start..meta_end];
             let region_item_area_size = r.meta_length.saturating_sub(0x10000) as usize;
@@ -1552,7 +1552,9 @@ impl<'a> VhdxIntegrity<'a> {
 
         if max_end == 0 {
             let bat_end = r.bat_offset.saturating_add(r.bat_length as u64);
-            max_end = bat_end.next_multiple_of(0x0010_0000);
+            max_end = bat_end
+                .checked_next_multiple_of(0x0010_0000)
+                .unwrap_or(u64::MAX);
         }
 
         if container_size > max_end {

@@ -1,0 +1,15 @@
+[package]
+name = "vhdx-forensic-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "parse_vhdx"
+path = "fuzz_targets/parse_vhdx.rs"
+test = false
+doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+vhdx-forensic = { path = ".." }
