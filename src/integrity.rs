@@ -361,15 +361,55 @@ impl<'a> VhdxIntegrity<'a> {
             issues.extend(self.check_header_pair());
         }
 
-        // Check dirty log on the active header (highest sequence number).
+        // Phase 2 + DirtyLog checks on the active (highest-seq) header.
         if let Some(active) = self.active_header_block() {
+            // 2A: GUID validity.
+            if active[16..32].iter().all(|&b| b == 0) {
+                issues.push(VhdxIntegrityAnomaly::FileWriteGuidAllZeros);
+            }
+            if active[32..48].iter().all(|&b| b == 0) {
+                issues.push(VhdxIntegrityAnomaly::DataWriteGuidAllZeros);
+            }
+            let log_guid: [u8; 16] = active[48..64].try_into().unwrap();
             let log_length = u32::from_le_bytes(active[68..72].try_into().unwrap());
             let log_offset = u64::from_le_bytes(active[72..80].try_into().unwrap());
+            let log_guid_zero = log_guid == [0u8; 16];
+            if !log_guid_zero && log_length == 0 {
+                issues.push(VhdxIntegrityAnomaly::LogGuidWithNoLog { log_guid });
+            }
+            if log_guid_zero && log_length > 0 {
+                issues.push(VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog { log_length });
+            }
+
+            // 2B: Version fields.
+            let log_version = u16::from_le_bytes(active[64..66].try_into().unwrap());
+            if log_version != 1 {
+                issues.push(VhdxIntegrityAnomaly::LogVersionInvalid { version: log_version });
+            }
+            let version = u16::from_le_bytes(active[66..68].try_into().unwrap());
+            if version != 1 {
+                issues.push(VhdxIntegrityAnomaly::VersionInvalid { version });
+            }
+
+            // 2C: Log alignment/range (only when log is active).
             if log_length > 0 {
-                issues.push(VhdxIntegrityAnomaly::DirtyLog {
-                    log_length,
-                    log_offset,
-                });
+                if log_offset % 0x0010_0000 != 0 {
+                    issues.push(VhdxIntegrityAnomaly::LogOffsetMisaligned { log_offset });
+                }
+                if log_length % 0x0010_0000 != 0 {
+                    issues.push(VhdxIntegrityAnomaly::LogLengthMisaligned { log_length });
+                }
+                if log_offset.saturating_add(u64::from(log_length)) > self.data.len() as u64 {
+                    issues.push(VhdxIntegrityAnomaly::LogBeyondContainer {
+                        log_offset,
+                        log_length,
+                        container_size: self.data.len() as u64,
+                    });
+                }
+                if log_offset < 0x0030_0000 {
+                    issues.push(VhdxIntegrityAnomaly::LogInReservedZone { log_offset });
+                }
+                issues.push(VhdxIntegrityAnomaly::DirtyLog { log_length, log_offset });
             }
         }
 
@@ -852,6 +892,12 @@ impl<'a> VhdxIntegrity<'a> {
             issues.push(VhdxIntegrityAnomaly::BothSequenceNumbersZero);
         } else if seq1 == seq2 {
             issues.push(VhdxIntegrityAnomaly::SequenceNumbersIdentical { value: seq1 });
+        } else {
+            // 2D: gap > 1 indicates one copy was patched outside a normal write cycle.
+            let gap = seq1.abs_diff(seq2);
+            if gap > 1 {
+                issues.push(VhdxIntegrityAnomaly::SequenceNumberGapLarge { seq1, seq2, gap });
+            }
         }
 
         let log_len1 = u32::from_le_bytes(h1[68..72].try_into().unwrap());
