@@ -648,6 +648,185 @@ fn phase2_severity_levels_correct() {
     }
 }
 
+// ── Phase 4 helpers ──────────────────────────────────────────────────────────
+
+/// Write a minimal valid 64-byte log entry at `at` with the given LogGuid and
+/// SequenceNumber, computing and storing the CRC32C.
+fn write_log_entry(buf: &mut [u8], at: usize, log_guid: [u8; 16], seq: u64) {
+    buf[at..at + 64].fill(0);
+    buf[at..at + 4].copy_from_slice(b"loge");
+    // buf[at+4..at+8] = CRC (written last, currently 0).
+    buf[at + 8..at + 12].copy_from_slice(&64u32.to_le_bytes()); // EntryLength = 64
+    buf[at + 16..at + 24].copy_from_slice(&seq.to_le_bytes()); // SequenceNumber
+    buf[at + 32..at + 48].copy_from_slice(&log_guid); // LogGuid
+    let crc = crc32c(&buf[at..at + 64]); // CRC with checksum field = 0
+    buf[at + 4..at + 8].copy_from_slice(&crc.to_le_bytes());
+}
+
+// Log region for Phase 4 tests: BAT area of a 4 MB sparse image (all zeros).
+const LOG_OFFSET: u64 = 0x0040_0000; // 4 MB — BAT area, zero in sparse build
+const LOG_GUID: [u8; 16] = [0xAB; 16];
+
+fn setup_dirty_log(image: &mut [u8]) {
+    image[H1 + 48..H1 + 64].copy_from_slice(&LOG_GUID); // non-zero LogGuid
+    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes()); // LogLength=1MB
+    image[H1 + 72..H1 + 80].copy_from_slice(&(LOG_OFFSET).to_le_bytes()); // LogOffset=4MB
+    recompute_header_crc(image, H1);
+}
+
+// ── Phase 4 tests ────────────────────────────────────────────────────────────
+
+// Test 41: log region all zeros with dirty flag
+
+#[test]
+fn log_zeroed_but_dirty_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // BAT area at 0x400000 is all zeros; mark as dirty log.
+    setup_dirty_log(&mut image);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogZeroedButDirty { .. }
+        )),
+        "expected LogZeroedButDirty, got: {issues:#?}"
+    );
+}
+
+// Test 42: log entry does not start with "loge"
+
+#[test]
+fn log_entry_signature_missing_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    setup_dirty_log(&mut image);
+    // Write non-"loge" bytes at the log start (not all zeros either).
+    image[LOG_OFFSET as usize..LOG_OFFSET as usize + 4].copy_from_slice(b"XXXX");
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogEntrySignatureMissing { .. }
+        )),
+        "expected LogEntrySignatureMissing, got: {issues:#?}"
+    );
+}
+
+// Test 43: log entry CRC mismatch
+
+#[test]
+fn log_entry_crc_mismatch_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    setup_dirty_log(&mut image);
+    // Write a valid-signature entry but with a wrong CRC.
+    let at = LOG_OFFSET as usize;
+    image[at..at + 4].copy_from_slice(b"loge");
+    image[at + 4..at + 8].copy_from_slice(&0x1234_5678u32.to_le_bytes()); // wrong CRC
+    image[at + 8..at + 12].copy_from_slice(&64u32.to_le_bytes()); // EntryLength
+    image[at + 32..at + 48].copy_from_slice(&LOG_GUID);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogEntryCrcMismatch { .. }
+        )),
+        "expected LogEntryCrcMismatch, got: {issues:#?}"
+    );
+}
+
+// Test 44: log entry LogGuid does not match active header's LogGuid
+
+#[test]
+fn log_entry_guid_mismatch_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    setup_dirty_log(&mut image);
+    // Write valid entry but with a different LogGuid.
+    let wrong_guid = [0xCD; 16]; // not LOG_GUID
+    write_log_entry(&mut image, LOG_OFFSET as usize, wrong_guid, 1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogEntryGuidMismatch { .. }
+        )),
+        "expected LogEntryGuidMismatch, got: {issues:#?}"
+    );
+}
+
+// Test 45: gap in log entry sequence numbers
+
+#[test]
+fn log_sequence_number_gap_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    setup_dirty_log(&mut image);
+    // Entry 0: seq=1, Entry 1: seq=3 (gap — expected seq=2).
+    let at = LOG_OFFSET as usize;
+    write_log_entry(&mut image, at, LOG_GUID, 1);
+    write_log_entry(&mut image, at + 64, LOG_GUID, 3); // gap: skipped seq 2
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogSequenceNumberGap {
+                expected_seq: 2,
+                found_seq: 3,
+                ..
+            }
+        )),
+        "expected LogSequenceNumberGap(expected=2,found=3), got: {issues:#?}"
+    );
+}
+
+// Test 46: Phase 4 severity levels
+
+#[test]
+fn phase4_severity_levels_correct() {
+    use Severity::*;
+    let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
+        (
+            VhdxIntegrityAnomaly::LogZeroedButDirty {
+                log_offset: 0,
+                log_length: 0,
+            },
+            Warning,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogEntrySignatureMissing { entry_offset: 0 },
+            Warning,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogEntryCrcMismatch {
+                entry_offset: 0,
+                computed: 0,
+                stored: 1,
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogEntryGuidMismatch {
+                entry_offset: 0,
+                entry_guid: [0u8; 16],
+                header_guid: [1u8; 16],
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogSequenceNumberGap {
+                at_offset: 0,
+                expected_seq: 2,
+                found_seq: 5,
+            },
+            Error,
+        ),
+    ];
+    for (anomaly, expected) in checks {
+        assert_eq!(
+            &anomaly.severity(),
+            expected,
+            "severity mismatch for {anomaly:?}"
+        );
+    }
+}
+
 // ── Phase 3 tests ────────────────────────────────────────────────────────────
 
 // Test 33: BAT region file_offset not 1 MB aligned

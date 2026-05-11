@@ -100,6 +100,33 @@ pub enum VhdxIntegrityAnomaly {
         copy2_value: u64,
     },
 
+    // ── Log section anomalies (Phase 4) ──────────────────────────────────────
+    /// The log region exists (LogLength > 0) but all bytes in the log area
+    /// are zero. The log was declared dirty but its content was zeroed —
+    /// possibly to block log-entry analysis while preserving the dirty state.
+    LogZeroedButDirty { log_offset: u64, log_length: u32 },
+    /// A log entry position does not begin with the expected "loge" signature.
+    LogEntrySignatureMissing { entry_offset: u64 },
+    /// A log entry's CRC32C is invalid. Cannot be safely replayed by Hyper-V.
+    LogEntryCrcMismatch {
+        entry_offset: u64,
+        computed: u32,
+        stored: u32,
+    },
+    /// The LogGuid inside a log entry does not match the active header's
+    /// LogGuid. The log was transplanted from a different disk image.
+    LogEntryGuidMismatch {
+        entry_offset: u64,
+        entry_guid: [u8; 16],
+        header_guid: [u8; 16],
+    },
+    /// A gap exists in the sequence numbers of consecutive log entries.
+    LogSequenceNumberGap {
+        at_offset: u64,
+        expected_seq: u64,
+        found_seq: u64,
+    },
+
     // ── Header GUID / version / log-pointer anomalies (Phase 2) ─────────────
     /// FileWriteGuid (header bytes 16–31) is all zeros — disk identity was
     /// wiped, preventing correlation with other images or audit trails.
@@ -288,6 +315,12 @@ impl VhdxIntegrityAnomaly {
             | Self::SequenceNumbersIdentical { .. }
             | Self::TrailingData { .. }
             | Self::CreatorStringAnomalous { .. } => Severity::Warning,
+            Self::LogEntryCrcMismatch { .. }
+            | Self::LogEntryGuidMismatch { .. }
+            | Self::LogSequenceNumberGap { .. } => Severity::Error,
+            Self::LogZeroedButDirty { .. } | Self::LogEntrySignatureMissing { .. } => {
+                Severity::Warning
+            }
             Self::RegionMisaligned { .. }
             | Self::RegionBeyondContainer { .. }
             | Self::RegionsOverlap { .. }
