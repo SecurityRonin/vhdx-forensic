@@ -25,6 +25,29 @@ const SB_BLOCK_PRESENT: u8 = 6;
 const BLOCK_SIZE_MIN: u32 = 1 << 20; // 1 MB
 const BLOCK_SIZE_MAX: u32 = 256 << 20; // 256 MB
 
+// Sentinel for chunk_ratio when it cannot be computed from metadata.
+const CHUNK_RATIO_INVALID: u64 = u64::MAX;
+
+/// Pre-parsed structural state derived from one pass over a valid region table
+/// and the metadata region. Threaded through all layer checks to avoid redundant
+/// re-parsing of the same region tables and metadata on each check function call.
+struct ParsedRegions {
+    bat_offset:  u64,
+    bat_length:  u32,
+    meta_offset: u64,
+    meta_length: u32,
+    /// Raw BlockSize from FileParameters; None if item was absent or unreadable.
+    block_size:  Option<u32>,
+    /// Raw LogicalSectorSize; None if item absent.
+    logical_ss:  Option<u32>,
+    /// Raw VirtualDiskSize; None if absent.
+    vdisk_size:  Option<u64>,
+    /// Computed from block_size/logical_ss; CHUNK_RATIO_INVALID when not computable.
+    chunk_ratio: u64,
+    has_parent:  bool,
+    leave_alloc: bool,
+}
+
 /// Diagnostic severity level.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -214,7 +237,7 @@ impl<'a> VhdxIntegrity<'a> {
         // Layer 1: container-level checks (fast gate).
         issues.extend(self.check_file_magic());
         if issues.iter().any(|a| a.severity() == Severity::Critical) {
-            return issues; // nothing more can be decoded
+            return issues;
         }
 
         // Layer 2: header CRC + semantic checks.
@@ -223,7 +246,7 @@ impl<'a> VhdxIntegrity<'a> {
         // Layer 3: region table CRC + copy-consistency checks.
         issues.extend(self.check_region_tables());
 
-        // Layer 4-6 require the region tables to be readable.
+        // Layers 4+ require the region tables to be readable.
         if issues
             .iter()
             .any(|a| matches!(a, VhdxIntegrityAnomaly::BothRegionTableCopiesInvalid))
@@ -231,19 +254,23 @@ impl<'a> VhdxIntegrity<'a> {
             return issues;
         }
 
+        // Parse all region + metadata state in one pass; thread through remaining layers.
+        let regions = self.parse_regions();
+        let rr = regions.as_ref();
+
         // Layer 4: metadata field validation (not CRC-protected).
-        issues.extend(self.check_metadata());
+        issues.extend(self.check_metadata_inner(rr));
 
         // Layer 5: BAT entry validation (not CRC-protected).
-        issues.extend(self.check_bat());
+        issues.extend(self.check_bat_inner(rr));
 
         // Layer 6: trailing data scan.
-        issues.extend(self.check_trailing_data());
+        issues.extend(self.check_trailing_data_inner(rr));
 
         issues
     }
 
-    // ── Individual check functions ────────────────────────────────────────────
+    // ── Public check functions ────────────────────────────────────────────────
 
     pub fn check_file_magic(&self) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
@@ -267,14 +294,10 @@ impl<'a> VhdxIntegrity<'a> {
 
         let h1_bad = self.check_single_header_crc(1);
         let h2_bad = self.check_single_header_crc(2);
-
-        // Capture booleans before the match moves both Options into the scrutinee.
         let (h1_ok, h2_ok) = (h1_bad.is_none(), h2_bad.is_none());
 
         match (h1_bad, h2_bad) {
             (Some(_), Some(_)) => {
-                // Both bad — report the umbrella anomaly; individual mismatches
-                // are subsumed.
                 issues.push(VhdxIntegrityAnomaly::BothHeaderCopiesInvalid);
                 return issues;
             }
@@ -283,7 +306,6 @@ impl<'a> VhdxIntegrity<'a> {
             (None, None) => {}
         }
 
-        // Both (or the surviving) copies are valid — cross-check semantics.
         if h1_ok && h2_ok {
             issues.extend(self.check_header_pair());
         }
@@ -308,7 +330,6 @@ impl<'a> VhdxIntegrity<'a> {
 
         let rt1_bad = self.check_single_rt_crc(1);
         let rt2_bad = self.check_single_rt_crc(2);
-
         let (rt1_ok, rt2_ok) = (rt1_bad.is_none(), rt2_bad.is_none());
 
         match (rt1_bad, rt2_bad) {
@@ -321,7 +342,6 @@ impl<'a> VhdxIntegrity<'a> {
             (None, None) => {}
         }
 
-        // Both valid — cross-check BAT and Metadata region entries.
         if rt1_ok && rt2_ok {
             issues.extend(self.check_region_table_pair());
         }
@@ -329,72 +349,167 @@ impl<'a> VhdxIntegrity<'a> {
         issues
     }
 
-    /// Check metadata fields without going through the validated parser.
+    /// Validate metadata fields.
     pub fn check_metadata(&self) -> Vec<VhdxIntegrityAnomaly> {
-        let mut issues = Vec::new();
+        self.check_metadata_inner(self.parse_regions().as_ref())
+    }
 
-        let (_, meta_off, meta_len) = match self.region_locations() {
-            Some(v) => v,
-            None => return issues,
-        };
+    /// Validate BAT entries.
+    pub fn check_bat(&self) -> Vec<VhdxIntegrityAnomaly> {
+        self.check_bat_inner(self.parse_regions().as_ref())
+    }
 
-        let start = meta_off as usize;
-        let end = start + meta_len as usize;
-        if self.data.len() < end + 0x10000 + 20 {
-            issues.push(VhdxIntegrityAnomaly::MetadataMissing(
-                "region out of bounds",
-            ));
-            return issues;
+    /// Detect trailing non-zero data.
+    pub fn check_trailing_data(&self) -> Vec<VhdxIntegrityAnomaly> {
+        self.check_trailing_data_inner(self.parse_regions().as_ref())
+    }
+
+    /// Return the file offset of the BAT region, or `None` if unreadable.
+    /// Used by the repair module to locate BAT entries.
+    pub fn bat_region_offset(&self) -> Option<u64> {
+        self.parse_regions().map(|r| r.bat_offset)
+    }
+
+    // ── Private: ParsedRegions ────────────────────────────────────────────────
+
+    /// Parse region table + metadata in one pass. Returns None only if no valid
+    /// region table can be found.
+    fn parse_regions(&self) -> Option<ParsedRegions> {
+        for rt_off in [REGION_TABLE1_OFFSET as usize, REGION_TABLE2_OFFSET as usize] {
+            if let Some(r) = self.try_parse_regions(rt_off) {
+                return Some(r);
+            }
         }
-        let region = &self.data[start..end];
-        if region.len() < 8 || &region[0..8] != METADATA_TABLE_SIGNATURE {
-            issues.push(VhdxIntegrityAnomaly::MetadataMissing(
-                "bad metadata signature",
-            ));
-            return issues;
+        None
+    }
+
+    fn try_parse_regions(&self, rt_off: usize) -> Option<ParsedRegions> {
+        if self.data.len() < rt_off + REGION_TABLE_CRC_COVERAGE {
+            return None;
         }
-
-        let entry_count = u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
-        let mut block_size: Option<u32> = None;
-        let mut has_parent = false;
-        let mut virtual_disk_size: Option<u64> = None;
-        let mut logical_sector_size: Option<u32> = None;
-
-        for i in 0..entry_count.min(256) {
-            let base = 32 + i * 32;
-            if base + 32 > region.len() {
+        let rt = &self.data[rt_off..rt_off + REGION_TABLE_CRC_COVERAGE];
+        if &rt[0..4] != REGION_TABLE_SIGNATURE {
+            return None;
+        }
+        let stored = u32::from_le_bytes(rt[4..8].try_into().unwrap());
+        let mut buf = rt.to_vec();
+        buf[4..8].fill(0);
+        if crc32c(&buf) != stored {
+            return None;
+        }
+        let entry_count =
+            (u32::from_le_bytes(rt[8..12].try_into().unwrap()) as usize).min(2048);
+        let mut bat: Option<(u64, u32)> = None;
+        let mut meta: Option<(u64, u32)> = None;
+        for i in 0..entry_count {
+            let base = 16usize.checked_add(i.checked_mul(REGION_ENTRY_SIZE)?)?;
+            if base + REGION_ENTRY_SIZE > rt.len() {
                 break;
             }
             let mut guid = [0u8; 16];
-            guid.copy_from_slice(&region[base..base + 16]);
-            let item_offset =
-                u32::from_le_bytes(region[base + 16..base + 20].try_into().unwrap()) as usize;
-            let item_len =
-                u32::from_le_bytes(region[base + 20..base + 24].try_into().unwrap()) as usize;
-
-            let data_start = start + 0x10000 + item_offset;
-            let data_end = data_start.saturating_add(item_len);
-            if self.data.len() < data_end {
-                continue;
+            guid.copy_from_slice(&rt[base..base + 16]);
+            let off = u64::from_le_bytes(rt[base + 16..base + 24].try_into().unwrap());
+            let len = u32::from_le_bytes(rt[base + 24..base + 28].try_into().unwrap());
+            if guid == BAT_GUID {
+                bat = Some((off, len));
+            } else if guid == METADATA_GUID {
+                meta = Some((off, len));
             }
-            let item_data = &self.data[data_start..data_end];
+        }
+        let (bat_offset, bat_length) = bat?;
+        let (meta_offset, meta_length) = meta?;
 
-            if guid == GUID_FILE_PARAMETERS && item_data.len() >= 8 {
-                block_size = Some(u32::from_le_bytes(item_data[0..4].try_into().unwrap()));
-                let flags = u32::from_le_bytes(item_data[4..8].try_into().unwrap());
-                has_parent = flags & 2 != 0;
-            } else if guid == GUID_VIRTUAL_DISK_SIZE && item_data.len() >= 8 {
-                virtual_disk_size = Some(u64::from_le_bytes(item_data[0..8].try_into().unwrap()));
-            } else if guid == GUID_LOGICAL_SECTOR_SIZE && item_data.len() >= 4 {
-                logical_sector_size = Some(u32::from_le_bytes(item_data[0..4].try_into().unwrap()));
+        // Parse metadata items in one pass.
+        let mut block_size: Option<u32> = None;
+        let mut logical_ss: Option<u32> = None;
+        let mut vdisk_size: Option<u64> = None;
+        let mut has_parent = false;
+        let mut leave_alloc = false;
+
+        let meta_start = meta_offset as usize;
+        let meta_table_end = meta_start + meta_length as usize;
+        if self.data.len() >= meta_table_end && meta_length >= 8 {
+            let region = &self.data[meta_start..meta_table_end];
+            if &region[..8] == METADATA_TABLE_SIGNATURE {
+                let count =
+                    u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
+                for i in 0..count.min(256) {
+                    let base = 32usize.checked_add(i.checked_mul(32)?)?;
+                    if base + 32 > region.len() {
+                        break;
+                    }
+                    let mut guid = [0u8; 16];
+                    guid.copy_from_slice(&region[base..base + 16]);
+                    let item_off = u32::from_le_bytes(
+                        region[base + 16..base + 20].try_into().unwrap(),
+                    ) as usize;
+                    let data_start =
+                        meta_start.checked_add(0x10000)?.checked_add(item_off)?;
+                    if guid == GUID_FILE_PARAMETERS && self.data.len() >= data_start + 8 {
+                        block_size = Some(u32::from_le_bytes(
+                            self.data[data_start..data_start + 4].try_into().unwrap(),
+                        ));
+                        let flags = u32::from_le_bytes(
+                            self.data[data_start + 4..data_start + 8].try_into().unwrap(),
+                        );
+                        leave_alloc = flags & 1 != 0;
+                        has_parent = flags & 2 != 0;
+                    } else if guid == GUID_VIRTUAL_DISK_SIZE
+                        && self.data.len() >= data_start + 8
+                    {
+                        vdisk_size = Some(u64::from_le_bytes(
+                            self.data[data_start..data_start + 8].try_into().unwrap(),
+                        ));
+                    } else if guid == GUID_LOGICAL_SECTOR_SIZE
+                        && self.data.len() >= data_start + 4
+                    {
+                        logical_ss = Some(u32::from_le_bytes(
+                            self.data[data_start..data_start + 4].try_into().unwrap(),
+                        ));
+                    }
+                }
             }
         }
 
-        if has_parent {
+        let chunk_ratio = match (block_size, logical_ss) {
+            (Some(bs), Some(ss)) if bs > 0 && ss > 0 => {
+                (1u64 << 23) * u64::from(ss) / u64::from(bs)
+            }
+            (Some(bs), None) if bs > 0 => (1u64 << 23) * 512 / u64::from(bs),
+            _ => CHUNK_RATIO_INVALID,
+        };
+
+        Some(ParsedRegions {
+            bat_offset,
+            bat_length,
+            meta_offset,
+            meta_length,
+            block_size,
+            logical_ss,
+            vdisk_size,
+            chunk_ratio,
+            has_parent,
+            leave_alloc,
+        })
+    }
+
+    // ── Private: layer check implementations ─────────────────────────────────
+
+    fn check_metadata_inner(
+        &self,
+        regions: Option<&ParsedRegions>,
+    ) -> Vec<VhdxIntegrityAnomaly> {
+        let mut issues = Vec::new();
+        let r = match regions {
+            Some(r) => r,
+            None => return issues,
+        };
+
+        if r.has_parent {
             issues.push(VhdxIntegrityAnomaly::DifferencingDisk);
         }
 
-        match block_size {
+        match r.block_size {
             None => issues.push(VhdxIntegrityAnomaly::MetadataMissing("BlockSize")),
             Some(bs) => {
                 if bs == 0 || bs < BLOCK_SIZE_MIN || bs > BLOCK_SIZE_MAX {
@@ -411,13 +526,13 @@ impl<'a> VhdxIntegrity<'a> {
             }
         }
 
-        if let Some(ss) = logical_sector_size {
+        if let Some(ss) = r.logical_ss {
             if ss != 512 && ss != 4096 {
                 issues.push(VhdxIntegrityAnomaly::LogicalSectorSizeInvalid { sector_size: ss });
             }
         }
 
-        match virtual_disk_size {
+        match r.vdisk_size {
             None => issues.push(VhdxIntegrityAnomaly::MetadataMissing("VirtualDiskSize")),
             Some(0) => issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeInvalid {
                 vdisk_size: 0,
@@ -431,7 +546,7 @@ impl<'a> VhdxIntegrity<'a> {
                         reason: "exceeds 64 TiB spec limit",
                     });
                 }
-                let sector_sz = logical_sector_size.unwrap_or(512);
+                let sector_sz = r.logical_ss.unwrap_or(512);
                 if sector_sz > 0 && vds % u64::from(sector_sz) != 0 {
                     issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeInvalid {
                         vdisk_size: vds,
@@ -444,22 +559,18 @@ impl<'a> VhdxIntegrity<'a> {
         issues
     }
 
-    /// Check all FULLY_PRESENT BAT entries for out-of-bounds, misalignment, and overlap.
-    pub fn check_bat(&self) -> Vec<VhdxIntegrityAnomaly> {
+    fn check_bat_inner(
+        &self,
+        regions: Option<&ParsedRegions>,
+    ) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
-
-        let (bat_off, _, _) = match self.region_locations() {
-            Some(v) => v,
+        let r = match regions {
+            Some(r) => r,
             None => return issues,
         };
 
-        // Find BAT length from the region table.
-        let bat_len = match self.bat_region_length() {
-            Some(l) => l as usize,
-            None => return issues,
-        };
-
-        let bat_start = bat_off as usize;
+        let bat_start = r.bat_offset as usize;
+        let bat_len = r.bat_length as usize;
         let bat_end = bat_start.saturating_add(bat_len);
         if self.data.len() < bat_end || bat_len < 8 {
             return issues;
@@ -467,22 +578,19 @@ impl<'a> VhdxIntegrity<'a> {
 
         let container_size = self.data.len() as u64;
         let entry_count = bat_len / 8;
+        let chunk_ratio = r.chunk_ratio;
 
-        // Collect (file_offset_mb, bat_index) for overlap detection.
         let mut present: Vec<(u64, usize)> = Vec::new();
-
-        // Determine chunk_ratio to distinguish data vs sector-bitmap entries.
-        let chunk_ratio = self.chunk_ratio().unwrap_or(u64::MAX);
 
         for i in 0..entry_count {
             let entry_pos = bat_start + i * 8;
-            let raw = u64::from_le_bytes(self.data[entry_pos..entry_pos + 8].try_into().unwrap());
+            let raw =
+                u64::from_le_bytes(self.data[entry_pos..entry_pos + 8].try_into().unwrap());
             let state = (raw & 0b111) as u8;
-            let is_bitmap_slot =
-                chunk_ratio < u64::MAX && (i as u64 % (chunk_ratio + 1)) == chunk_ratio;
+            let is_bitmap_slot = chunk_ratio < CHUNK_RATIO_INVALID
+                && (i as u64 % (chunk_ratio + 1)) == chunk_ratio;
 
             if is_bitmap_slot {
-                // Sector bitmap entry: only 0 (not present) and 6 (present) are valid.
                 if state != SB_BLOCK_NOT_PRESENT && state != SB_BLOCK_PRESENT {
                     issues.push(VhdxIntegrityAnomaly::SectorBitmapInvalidState {
                         bat_index: i,
@@ -500,11 +608,9 @@ impl<'a> VhdxIntegrity<'a> {
                 continue;
             }
 
-            // Decode file offset (bits 20..63 are MB offset).
             let offset_mb = raw >> 20;
             let file_offset = offset_mb * 0x0010_0000;
 
-            // Reserved bits 3..19 non-zero → unaligned / manually patched.
             if raw & 0x000F_FFF8 != 0 {
                 issues.push(VhdxIntegrityAnomaly::BatEntryUnaligned {
                     bat_index: i,
@@ -521,11 +627,10 @@ impl<'a> VhdxIntegrity<'a> {
                 continue;
             }
 
-            // Accumulate for overlap check.
             present.push((offset_mb, i));
         }
 
-        // Sort by offset_mb and detect duplicates.
+        // Overlap detection.
         present.sort_unstable_by_key(|&(off, _)| off);
         for w in present.windows(2) {
             if w[0].0 == w[1].0 {
@@ -537,31 +642,43 @@ impl<'a> VhdxIntegrity<'a> {
             }
         }
 
+        // VirtualDiskSizeUnderreported — highest present offset vs declared size.
+        if let (Some(bs), Some(declared_vds)) = (r.block_size, r.vdisk_size) {
+            if bs > 0 && !present.is_empty() {
+                let max_offset_mb = present.iter().map(|&(off, _)| off).max().unwrap_or(0);
+                let bat_coverage = (max_offset_mb + 1) * 0x0010_0000;
+                if bat_coverage > declared_vds {
+                    issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeUnderreported {
+                        declared: declared_vds,
+                        bat_coverage,
+                    });
+                }
+            }
+        }
+
         issues
     }
 
-    /// Detect non-zero bytes after the last BAT-addressed data block.
-    pub fn check_trailing_data(&self) -> Vec<VhdxIntegrityAnomaly> {
+    fn check_trailing_data_inner(
+        &self,
+        regions: Option<&ParsedRegions>,
+    ) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
+        let r = match regions {
+            Some(r) => r,
+            None => return issues,
+        };
 
-        let (bat_off, _, _) = match self.region_locations() {
-            Some(v) => v,
-            None => return issues,
-        };
-        let bat_len = match self.bat_region_length() {
-            Some(l) => l as usize,
-            None => return issues,
-        };
-        let block_size = match self.raw_block_size() {
+        let block_size = match r.block_size {
             Some(bs) if bs > 0 => u64::from(bs),
             _ => return issues,
         };
 
-        let bat_start = bat_off as usize;
+        let bat_start = r.bat_offset as usize;
+        let bat_len = r.bat_length as usize;
         let entry_count = bat_len / 8;
         let container_size = self.data.len() as u64;
 
-        // Find the highest file_offset among FULLY_PRESENT blocks.
         let mut max_end: u64 = 0;
         for i in 0..entry_count {
             let ep = bat_start + i * 8;
@@ -580,14 +697,11 @@ impl<'a> VhdxIntegrity<'a> {
         }
 
         if max_end == 0 {
-            // No data blocks present — use the BAT/metadata region end as the
-            // expected end-of-useful-data boundary.
-            let bat_end = bat_off.saturating_add(bat_len as u64);
-            max_end = bat_end.next_multiple_of(0x0010_0000); // 1 MB-align
+            let bat_end = r.bat_offset.saturating_add(r.bat_length as u64);
+            max_end = bat_end.next_multiple_of(0x0010_0000);
         }
 
         if container_size > max_end {
-            // Scan whether the trailing bytes are non-zero.
             let trailing_start = max_end as usize;
             let has_nonzero = self.data[trailing_start..].iter().any(|&b| b != 0);
             if has_nonzero {
@@ -599,12 +713,6 @@ impl<'a> VhdxIntegrity<'a> {
         }
 
         issues
-    }
-
-    /// Return the file offset of the BAT region, or `None` if the region tables
-    /// are unreadable. Used by the repair module to locate BAT entries.
-    pub fn bat_region_offset(&self) -> Option<u64> {
-        self.region_locations().map(|(off, _, _)| off)
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -681,7 +789,6 @@ impl<'a> VhdxIntegrity<'a> {
         }
     }
 
-    /// Cross-check both valid header copies for semantic inconsistencies.
     fn check_header_pair(&self) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
         let h1 = &self.data[HEADER1_OFFSET as usize..HEADER1_OFFSET as usize + HEADER_SIZE];
@@ -696,7 +803,6 @@ impl<'a> VhdxIntegrity<'a> {
             issues.push(VhdxIntegrityAnomaly::SequenceNumbersIdentical { value: seq1 });
         }
 
-        // Log fields should be identical across both copies when both are valid.
         let log_len1 = u32::from_le_bytes(h1[68..72].try_into().unwrap());
         let log_len2 = u32::from_le_bytes(h2[68..72].try_into().unwrap());
         if log_len1 != log_len2 {
@@ -719,7 +825,6 @@ impl<'a> VhdxIntegrity<'a> {
         issues
     }
 
-    /// Cross-check RT1 vs RT2 BAT and Metadata region entries.
     fn check_region_table_pair(&self) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
 
@@ -742,7 +847,7 @@ impl<'a> VhdxIntegrity<'a> {
             let mut guid2 = [0u8; 16];
             guid2.copy_from_slice(&rt2[base..base + 16]);
             if guid1 != guid2 {
-                continue; // different entry — skip (count mismatch or ordering)
+                continue;
             }
             let region_name = if guid1 == BAT_GUID {
                 "BAT"
@@ -777,7 +882,6 @@ impl<'a> VhdxIntegrity<'a> {
         issues
     }
 
-    /// Return the active header block (highest valid sequence number).
     fn active_header_block(&self) -> Option<&[u8]> {
         let h1_off = HEADER1_OFFSET as usize;
         let h2_off = HEADER2_OFFSET as usize;
@@ -799,171 +903,5 @@ impl<'a> VhdxIntegrity<'a> {
             (false, true) => Some(&self.data[h2_off..h2_off + HEADER_SIZE]),
             (false, false) => None,
         }
-    }
-
-    /// Return (bat_offset, metadata_offset, metadata_length) from the primary
-    /// region table. Falls back to RT2 if RT1 is invalid.
-    fn region_locations(&self) -> Option<(u64, u64, u32)> {
-        for rt_off in [REGION_TABLE1_OFFSET as usize, REGION_TABLE2_OFFSET as usize] {
-            if let Some(v) = self.parse_region_locations(rt_off) {
-                return Some(v);
-            }
-        }
-        None
-    }
-
-    fn parse_region_locations(&self, rt_off: usize) -> Option<(u64, u64, u32)> {
-        if self.data.len() < rt_off + REGION_TABLE_CRC_COVERAGE {
-            return None;
-        }
-        let rt = &self.data[rt_off..rt_off + REGION_TABLE_CRC_COVERAGE];
-        if &rt[0..4] != REGION_TABLE_SIGNATURE {
-            return None;
-        }
-        // Validate CRC.
-        let stored = u32::from_le_bytes(rt[4..8].try_into().unwrap());
-        let mut buf = rt.to_vec();
-        buf[4..8].fill(0);
-        if crc32c(&buf) != stored {
-            return None;
-        }
-        let entry_count = (u32::from_le_bytes(rt[8..12].try_into().unwrap()) as usize).min(2048);
-        let mut bat: Option<(u64, u32)> = None;
-        let mut meta: Option<(u64, u32)> = None;
-        for i in 0..entry_count {
-            let base = 16 + i * REGION_ENTRY_SIZE;
-            if base + REGION_ENTRY_SIZE > rt.len() {
-                break;
-            }
-            let mut guid = [0u8; 16];
-            guid.copy_from_slice(&rt[base..base + 16]);
-            let off = u64::from_le_bytes(rt[base + 16..base + 24].try_into().unwrap());
-            let len = u32::from_le_bytes(rt[base + 24..base + 28].try_into().unwrap());
-            if guid == BAT_GUID {
-                bat = Some((off, len));
-            } else if guid == METADATA_GUID {
-                meta = Some((off, len));
-            }
-        }
-        match (bat, meta) {
-            (Some((bo, _)), Some((mo, ml))) => Some((bo, mo, ml)),
-            _ => None,
-        }
-    }
-
-    fn bat_region_length(&self) -> Option<u32> {
-        for rt_off in [REGION_TABLE1_OFFSET as usize, REGION_TABLE2_OFFSET as usize] {
-            if let Some(l) = self.parse_bat_length(rt_off) {
-                return Some(l);
-            }
-        }
-        None
-    }
-
-    fn parse_bat_length(&self, rt_off: usize) -> Option<u32> {
-        if self.data.len() < rt_off + REGION_TABLE_CRC_COVERAGE {
-            return None;
-        }
-        let rt = &self.data[rt_off..rt_off + REGION_TABLE_CRC_COVERAGE];
-        if &rt[0..4] != REGION_TABLE_SIGNATURE {
-            return None;
-        }
-        let stored = u32::from_le_bytes(rt[4..8].try_into().unwrap());
-        let mut buf = rt.to_vec();
-        buf[4..8].fill(0);
-        if crc32c(&buf) != stored {
-            return None;
-        }
-        let count = (u32::from_le_bytes(rt[8..12].try_into().unwrap()) as usize).min(2048);
-        for i in 0..count {
-            let base = 16 + i * REGION_ENTRY_SIZE;
-            if base + REGION_ENTRY_SIZE > rt.len() {
-                break;
-            }
-            let mut guid = [0u8; 16];
-            guid.copy_from_slice(&rt[base..base + 16]);
-            if guid == BAT_GUID {
-                return Some(u32::from_le_bytes(
-                    rt[base + 24..base + 28].try_into().unwrap(),
-                ));
-            }
-        }
-        None
-    }
-
-    /// Read raw BlockSize from metadata without validation.
-    fn raw_block_size(&self) -> Option<u32> {
-        let (_, meta_off, meta_len) = self.region_locations()?;
-        let start = meta_off as usize;
-        let end = start + meta_len as usize;
-        if self.data.len() < end || meta_len < 8 {
-            return None;
-        }
-        let region = &self.data[start..end];
-        if &region[0..8] != METADATA_TABLE_SIGNATURE {
-            return None;
-        }
-        let count = u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
-        for i in 0..count.min(256) {
-            let base = 32 + i * 32;
-            if base + 32 > region.len() {
-                break;
-            }
-            let mut guid = [0u8; 16];
-            guid.copy_from_slice(&region[base..base + 16]);
-            if guid != GUID_FILE_PARAMETERS {
-                continue;
-            }
-            let off = u32::from_le_bytes(region[base + 16..base + 20].try_into().unwrap()) as usize;
-            let data_start = start + 0x10000 + off;
-            if self.data.len() >= data_start + 4 {
-                return Some(u32::from_le_bytes(
-                    self.data[data_start..data_start + 4].try_into().unwrap(),
-                ));
-            }
-        }
-        None
-    }
-
-    /// Compute chunk_ratio from raw metadata (returns None on invalid values).
-    fn chunk_ratio(&self) -> Option<u64> {
-        let (_, meta_off, meta_len) = self.region_locations()?;
-        let start = meta_off as usize;
-        let end = start + meta_len as usize;
-        if self.data.len() < end {
-            return None;
-        }
-        let region = &self.data[start..end];
-        if region.len() < 8 || &region[0..8] != METADATA_TABLE_SIGNATURE {
-            return None;
-        }
-        let count = u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
-        let mut block_size: Option<u32> = None;
-        let mut sector_size: Option<u32> = None;
-        for i in 0..count.min(256) {
-            let base = 32 + i * 32;
-            if base + 32 > region.len() {
-                break;
-            }
-            let mut guid = [0u8; 16];
-            guid.copy_from_slice(&region[base..base + 16]);
-            let off = u32::from_le_bytes(region[base + 16..base + 20].try_into().unwrap()) as usize;
-            let data_start = start + 0x10000 + off;
-            if guid == GUID_FILE_PARAMETERS && self.data.len() >= data_start + 4 {
-                block_size = Some(u32::from_le_bytes(
-                    self.data[data_start..data_start + 4].try_into().unwrap(),
-                ));
-            } else if guid == GUID_LOGICAL_SECTOR_SIZE && self.data.len() >= data_start + 4 {
-                sector_size = Some(u32::from_le_bytes(
-                    self.data[data_start..data_start + 4].try_into().unwrap(),
-                ));
-            }
-        }
-        let bs = block_size.filter(|&b| b > 0)?;
-        let ss = sector_size.unwrap_or(512);
-        if ss == 0 {
-            return None;
-        }
-        Some((1u64 << 23) * u64::from(ss) / u64::from(bs))
     }
 }
