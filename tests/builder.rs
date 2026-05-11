@@ -35,6 +35,13 @@ pub struct VhdxBuilder {
     logical_sector_size: u32,
     sector_data: HashMap<u64, Vec<u8>>,
     sparse: bool,
+    // Adversarial overrides — applied after normal build so CRCs are correct
+    // for CRC-unprotected regions (metadata, BAT) or re-CRCed (region table).
+    meta_block_size_override: Option<u32>,
+    meta_sector_size_override: Option<u32>,
+    meta_vdisk_size_override: Option<u64>,
+    region_bat_offset_override: Option<u64>,
+    bat_patches: Vec<(usize, u64)>,
 }
 
 impl VhdxBuilder {
@@ -45,7 +52,42 @@ impl VhdxBuilder {
             logical_sector_size: 512,
             sector_data: HashMap::new(),
             sparse: false,
+            meta_block_size_override: None,
+            meta_sector_size_override: None,
+            meta_vdisk_size_override: None,
+            region_bat_offset_override: None,
+            bat_patches: Vec::new(),
         }
+    }
+
+    /// Override the BlockSize field in the metadata item area (bypasses CRC — not protected).
+    pub fn with_meta_block_size(mut self, block_size: u32) -> Self {
+        self.meta_block_size_override = Some(block_size);
+        self
+    }
+
+    /// Override the LogicalSectorSize field in the metadata item area.
+    pub fn with_meta_sector_size(mut self, sector_size: u32) -> Self {
+        self.meta_sector_size_override = Some(sector_size);
+        self
+    }
+
+    /// Override the VirtualDiskSize field in the metadata item area.
+    pub fn with_meta_vdisk_size(mut self, vdisk_size: u64) -> Self {
+        self.meta_vdisk_size_override = Some(vdisk_size);
+        self
+    }
+
+    /// Override the BAT region file_offset in both region table copies (re-CRCs each).
+    pub fn with_region_bat_offset(mut self, offset: u64) -> Self {
+        self.region_bat_offset_override = Some(offset);
+        self
+    }
+
+    /// Patch a raw BAT entry (index into the BAT array) with an arbitrary u64 value.
+    pub fn with_bat_patch(mut self, entry_idx: usize, value: u64) -> Self {
+        self.bat_patches.push((entry_idx, value));
+        self
     }
 
     /// Mark all data blocks as not-present (sparse). Reads return zeros.
@@ -170,6 +212,38 @@ impl VhdxBuilder {
                         }
                     }
                 }
+            }
+        }
+
+        // Apply adversarial overrides.
+        // Metadata items are at metadata_offset + 0x10000 (the item area, NOT CRC-protected).
+        //   FileParameters (BlockSize u32, Flags u32): item_offset=0  → buf[base+0..+4] / [+4..+8]
+        //   VirtualDiskSize u64:                       item_offset=8  → buf[base+8..+16]
+        //   LogicalSectorSize u32:                     item_offset=16 → buf[base+16..+20]
+        let meta_items_base = metadata_offset as usize + 0x10000;
+        if let Some(bs) = self.meta_block_size_override {
+            buf[meta_items_base..meta_items_base + 4].copy_from_slice(&bs.to_le_bytes());
+        }
+        if let Some(vds) = self.meta_vdisk_size_override {
+            buf[meta_items_base + 8..meta_items_base + 16].copy_from_slice(&vds.to_le_bytes());
+        }
+        if let Some(ss) = self.meta_sector_size_override {
+            buf[meta_items_base + 16..meta_items_base + 20].copy_from_slice(&ss.to_le_bytes());
+        }
+        // Region table: BAT entry's file_offset field is at byte 32 within the region table.
+        // Region tables ARE CRC32C-protected, so re-CRC both copies after patching.
+        if let Some(new_bat_off) = self.region_bat_offset_override {
+            for rt_off in [0x0020_0000usize, 0x0024_0000usize] {
+                buf[rt_off + 32..rt_off + 40].copy_from_slice(&new_bat_off.to_le_bytes());
+                let slice = &mut buf[rt_off..rt_off + 65536];
+                write_crc32c(slice, 4);
+            }
+        }
+        // BAT entries are NOT CRC-protected — patch directly.
+        for (entry_idx, value) in &self.bat_patches {
+            let bat_pos = bat_offset as usize + entry_idx * 8;
+            if bat_pos + 8 <= buf.len() {
+                buf[bat_pos..bat_pos + 8].copy_from_slice(&value.to_le_bytes());
             }
         }
 

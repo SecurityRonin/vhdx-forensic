@@ -14,6 +14,14 @@ pub enum VhdxError {
     MetadataRegionMissing,
     #[error("required metadata item missing: {0}")]
     MetadataMissing(&'static str),
+    #[error("metadata value is outside valid range: {0}")]
+    InvalidMetadata(&'static str),
+    #[error("container is too small to be a valid VHDX (minimum {0} bytes required)")]
+    ContainerTooSmall(u64),
+    #[error("region or BAT file offset is outside the container bounds")]
+    OffsetOutOfBounds,
+    #[error("BAT entry file offset calculation overflows u64")]
+    AddressOverflow,
     #[error("sector out of range (sector {sector}, virtual disk size {size})")]
     SectorOutOfRange { sector: u64, size: u64 },
     #[error("BAT entry not present for sector {0}")]
