@@ -20,12 +20,17 @@
 mod bat;
 mod error;
 mod header;
+pub mod integrity;
 mod metadata;
 mod reader;
+pub mod repair;
 mod region;
 
 pub use error::{Result, VhdxError};
+pub use header::crc32c;
+pub use integrity::{Severity, VhdxIntegrity, VhdxIntegrityAnomaly};
 pub use reader::VhdxReader;
+pub use repair::{CannotRepair, RepairAction, RepairReport, VhdxRepair};
 
 // Well-known VHDX file magic.
 pub const FILE_MAGIC: &[u8; 8] = b"vhdxfile";

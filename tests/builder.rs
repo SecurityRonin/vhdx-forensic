@@ -40,8 +40,10 @@ pub struct VhdxBuilder {
     meta_block_size_override: Option<u32>,
     meta_sector_size_override: Option<u32>,
     meta_vdisk_size_override: Option<u64>,
+    meta_has_parent: bool,
     region_bat_offset_override: Option<u64>,
     bat_patches: Vec<(usize, u64)>,
+    trailing_bytes: usize,
 }
 
 impl VhdxBuilder {
@@ -55,8 +57,10 @@ impl VhdxBuilder {
             meta_block_size_override: None,
             meta_sector_size_override: None,
             meta_vdisk_size_override: None,
+            meta_has_parent: false,
             region_bat_offset_override: None,
             bat_patches: Vec::new(),
+            trailing_bytes: 0,
         }
     }
 
@@ -99,6 +103,18 @@ impl VhdxBuilder {
     /// Add payload for a specific logical sector (0-indexed).
     pub fn with_sector_data(mut self, sector: u64, data: Vec<u8>) -> Self {
         self.sector_data.insert(sector, data);
+        self
+    }
+
+    /// Set HasParent=true in the FileParameters metadata item (bit 1 of Flags).
+    pub fn with_has_parent(mut self) -> Self {
+        self.meta_has_parent = true;
+        self
+    }
+
+    /// Append N extra non-zero bytes at the end of the image (simulates trailing slack).
+    pub fn with_trailing_bytes(mut self, n: usize) -> Self {
+        self.trailing_bytes = n;
         self
     }
 
@@ -247,6 +263,19 @@ impl VhdxBuilder {
             if bat_pos + 8 <= buf.len() {
                 buf[bat_pos..bat_pos + 8].copy_from_slice(&value.to_le_bytes());
             }
+        }
+
+        // HasParent flag — bit 1 of the FileParameters Flags u32 at meta_items_base+4.
+        if self.meta_has_parent {
+            let flags_off = meta_items_base + 4;
+            let mut flags = u32::from_le_bytes(buf[flags_off..flags_off + 4].try_into().unwrap());
+            flags |= 2; // HasParent bit
+            buf[flags_off..flags_off + 4].copy_from_slice(&flags.to_le_bytes());
+        }
+
+        // Trailing bytes (non-zero to be detectable).
+        if self.trailing_bytes > 0 {
+            buf.resize(buf.len() + self.trailing_bytes, 0xCC);
         }
 
         buf
