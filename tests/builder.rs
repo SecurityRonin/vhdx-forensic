@@ -288,12 +288,20 @@ impl VhdxBuilder {
     fn write_header(buf: &mut [u8], offset: usize, seq: u64) {
         let slice = &mut buf[offset..offset + 4096];
         slice[0..4].copy_from_slice(b"head");
-        // Checksum at [4..8] — written last.
         slice[8..16].copy_from_slice(&seq.to_le_bytes()); // SequenceNumber
-                                                          // FileWriteGuid, DataWriteGuid, LogGuid: all zeros (acceptable for test).
-                                                          // LogVersion = 0, Version = 1.
-        slice[64..66].copy_from_slice(&0u16.to_le_bytes()); // LogVersion
-        slice[66..68].copy_from_slice(&1u16.to_le_bytes()); // Version
+        // FileWriteGuid [16..32]: non-zero so FileWriteGuidAllZeros does not fire on clean images.
+        slice[16..32].copy_from_slice(&[
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+        ]);
+        // DataWriteGuid [32..48]: non-zero.
+        slice[32..48].copy_from_slice(&[
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+        ]);
+        // LogGuid [48..64]: all zeros (no dirty log, LogGuid=0 is correct clean state).
+        slice[64..66].copy_from_slice(&1u16.to_le_bytes()); // LogVersion = 1 (spec-required)
+        slice[66..68].copy_from_slice(&1u16.to_le_bytes()); // Version = 1
         slice[68..72].copy_from_slice(&0u32.to_le_bytes()); // LogLength
         slice[72..80].copy_from_slice(&0u64.to_le_bytes()); // LogOffset
         write_crc32c(slice, 4);

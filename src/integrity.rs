@@ -100,6 +100,46 @@ pub enum VhdxIntegrityAnomaly {
         copy2_value: u64,
     },
 
+    // ── Header GUID / version / log-pointer anomalies (Phase 2) ─────────────
+    /// FileWriteGuid (header bytes 16–31) is all zeros — disk identity was
+    /// wiped, preventing correlation with other images or audit trails.
+    FileWriteGuidAllZeros,
+    /// DataWriteGuid (header bytes 32–47) is all zeros — data-layer identity
+    /// erased; disrupts parent-GUID verification in differencing disk chains.
+    DataWriteGuidAllZeros,
+    /// LogGuid (bytes 48–63) is non-zero but LogLength is zero — the log GUID
+    /// was set but the log was cleared without updating the GUID. Indicates
+    /// manual header manipulation between write cycles.
+    LogGuidWithNoLog { log_guid: [u8; 16] },
+    /// LogLength is non-zero (dirty log exists) but LogGuid is all zeros —
+    /// structurally impossible via normal Hyper-V operation. Strong indicator
+    /// of a manually constructed dirty-log header.
+    LogGuidAllZerosWithDirtyLog { log_length: u32 },
+    /// LogVersion (bytes 64–65) must be 1. Any other value indicates a format
+    /// version violation or direct header patching.
+    LogVersionInvalid { version: u16 },
+    /// Version (bytes 66–67) must be 1 — the only defined VHDX format version.
+    VersionInvalid { version: u16 },
+    /// LogOffset (bytes 72–79) must be 1 MB aligned. Misalignment indicates
+    /// manual patching of the log pointer.
+    LogOffsetMisaligned { log_offset: u64 },
+    /// LogLength (bytes 68–71) must be a multiple of 1 MB.
+    LogLengthMisaligned { log_length: u32 },
+    /// LogOffset + LogLength extends past the end of the file. The declared
+    /// log region does not physically exist in this container.
+    LogBeyondContainer {
+        log_offset: u64,
+        log_length: u32,
+        container_size: u64,
+    },
+    /// LogOffset places the log inside the reserved zone (below 0x300000). A
+    /// log here would overwrite structural data if replayed — log poisoning.
+    LogInReservedZone { log_offset: u64 },
+    /// Both header copies have valid CRCs but their sequence numbers differ by
+    /// more than 1. A larger gap indicates one copy was patched without going
+    /// through a normal write cycle.
+    SequenceNumberGapLarge { seq1: u64, seq2: u64, gap: u64 },
+
     // ── Log section indicators ────────────────────────────────────────────────
     /// The active header declares a non-zero log region, indicating uncommitted
     /// writes were present at image capture time. Log replay is required for a
@@ -211,6 +251,17 @@ impl VhdxIntegrityAnomaly {
             | Self::SequenceNumbersIdentical { .. }
             | Self::TrailingData { .. }
             | Self::CreatorStringAnomalous { .. } => Severity::Warning,
+            Self::FileWriteGuidAllZeros
+            | Self::DataWriteGuidAllZeros
+            | Self::LogGuidWithNoLog { .. }
+            | Self::LogVersionInvalid { .. }
+            | Self::VersionInvalid { .. }
+            | Self::SequenceNumberGapLarge { .. } => Severity::Warning,
+            Self::LogGuidAllZerosWithDirtyLog { .. }
+            | Self::LogOffsetMisaligned { .. }
+            | Self::LogLengthMisaligned { .. }
+            | Self::LogBeyondContainer { .. }
+            | Self::LogInReservedZone { .. } => Severity::Error,
             Self::DirtyLog { .. } => Severity::Info,
         }
     }

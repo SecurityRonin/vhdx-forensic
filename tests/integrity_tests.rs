@@ -382,6 +382,272 @@ fn trailing_data_detected() {
     );
 }
 
+// ── Phase 2 tests ────────────────────────────────────────────────────────────
+
+// Test 21: FileWriteGuid all zeros
+
+#[test]
+fn file_write_guid_all_zeros_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Zero out FileWriteGuid in the active header (H1, seq=1).
+    image[H1 + 16..H1 + 32].fill(0);
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::FileWriteGuidAllZeros)),
+        "expected FileWriteGuidAllZeros, got: {issues:#?}"
+    );
+}
+
+// Test 22: DataWriteGuid all zeros
+
+#[test]
+fn data_write_guid_all_zeros_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Zero out DataWriteGuid in the active header (H1, seq=1).
+    image[H1 + 32..H1 + 48].fill(0);
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::DataWriteGuidAllZeros)),
+        "expected DataWriteGuidAllZeros, got: {issues:#?}"
+    );
+}
+
+// Test 23: LogGuid non-zero with no dirty log
+
+#[test]
+fn log_guid_with_no_log_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Set a non-zero LogGuid with LogLength=0 (no dirty log).
+    image[H1 + 48..H1 + 64].fill(0xAB);
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogGuidWithNoLog { .. })),
+        "expected LogGuidWithNoLog, got: {issues:#?}"
+    );
+}
+
+// Test 24: LogGuid all zeros with dirty log
+
+#[test]
+fn log_guid_all_zeros_with_dirty_log_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Set 1 MB dirty log at 3 MB; LogGuid stays all-zeros (builder default).
+    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes()); // LogLength=1MB
+    image[H1 + 72..H1 + 80].copy_from_slice(&0x0030_0000u64.to_le_bytes()); // LogOffset=3MB
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog { log_length: 0x0010_0000 }
+        )),
+        "expected LogGuidAllZerosWithDirtyLog, got: {issues:#?}"
+    );
+}
+
+// Test 25: LogVersion invalid
+
+#[test]
+fn log_version_invalid_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Set LogVersion = 2 (valid is 1 only).
+    image[H1 + 64..H1 + 66].copy_from_slice(&2u16.to_le_bytes());
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogVersionInvalid { version: 2 }
+        )),
+        "expected LogVersionInvalid(version=2), got: {issues:#?}"
+    );
+}
+
+// Test 26: Version invalid
+
+#[test]
+fn version_invalid_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Set Version = 2 (valid is 1 only).
+    image[H1 + 66..H1 + 68].copy_from_slice(&2u16.to_le_bytes());
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::VersionInvalid { version: 2 }
+        )),
+        "expected VersionInvalid(version=2), got: {issues:#?}"
+    );
+}
+
+// Test 27: LogOffset not 1 MB aligned
+
+#[test]
+fn log_offset_misaligned_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // LogLength=1MB (aligned); LogOffset=0x300001 (misaligned by 1 byte).
+    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes());
+    image[H1 + 72..H1 + 80].copy_from_slice(&0x0030_0001u64.to_le_bytes());
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogOffsetMisaligned { log_offset: 0x0030_0001 }
+        )),
+        "expected LogOffsetMisaligned, got: {issues:#?}"
+    );
+}
+
+// Test 28: LogLength not 1 MB aligned
+
+#[test]
+fn log_length_misaligned_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // LogLength=512 bytes (not MB-multiple); LogOffset=3MB (aligned).
+    image[H1 + 68..H1 + 72].copy_from_slice(&512u32.to_le_bytes());
+    image[H1 + 72..H1 + 80].copy_from_slice(&0x0030_0000u64.to_le_bytes());
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogLengthMisaligned { log_length: 512 }
+        )),
+        "expected LogLengthMisaligned(512), got: {issues:#?}"
+    );
+}
+
+// Test 29: Log extends past container end
+
+#[test]
+fn log_beyond_container_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    let container_size = image.len() as u64;
+    // LogOffset=1MB before end; LogLength=2MB → log_end > container.
+    let log_offset = container_size - 0x0010_0000;
+    image[H1 + 68..H1 + 72].copy_from_slice(&0x0020_0000u32.to_le_bytes()); // 2 MB
+    image[H1 + 72..H1 + 80].copy_from_slice(&log_offset.to_le_bytes());
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogBeyondContainer { .. }
+        )),
+        "expected LogBeyondContainer, got: {issues:#?}"
+    );
+}
+
+// Test 30: LogOffset in reserved zone (below 0x300000)
+
+#[test]
+fn log_in_reserved_zone_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // LogOffset=1MB (header zone, well below 0x300000); LogLength=1MB.
+    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes());
+    image[H1 + 72..H1 + 80].copy_from_slice(&0x0010_0000u64.to_le_bytes());
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::LogInReservedZone { log_offset: 0x0010_0000 }
+        )),
+        "expected LogInReservedZone, got: {issues:#?}"
+    );
+}
+
+// Test 31: Sequence number gap > 1 between both valid headers
+
+#[test]
+fn sequence_number_gap_large_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // H1=seq=100, H2=seq=0 (default); gap=100 > 1.
+    image[H1 + 8..H1 + 16].copy_from_slice(&100u64.to_le_bytes());
+    recompute_header_crc(&mut image, H1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::SequenceNumberGapLarge { gap: 100, .. }
+        )),
+        "expected SequenceNumberGapLarge(gap=100), got: {issues:#?}"
+    );
+}
+
+// Test 32: Phase 2 severity levels
+
+#[test]
+fn phase2_severity_levels_correct() {
+    use Severity::*;
+    let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
+        (VhdxIntegrityAnomaly::FileWriteGuidAllZeros, Warning),
+        (VhdxIntegrityAnomaly::DataWriteGuidAllZeros, Warning),
+        (
+            VhdxIntegrityAnomaly::LogGuidWithNoLog {
+                log_guid: [0xAB; 16],
+            },
+            Warning,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog {
+                log_length: 0x0010_0000,
+            },
+            Error,
+        ),
+        (VhdxIntegrityAnomaly::LogVersionInvalid { version: 0 }, Warning),
+        (VhdxIntegrityAnomaly::VersionInvalid { version: 2 }, Warning),
+        (
+            VhdxIntegrityAnomaly::LogOffsetMisaligned { log_offset: 1 },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogLengthMisaligned { log_length: 512 },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogBeyondContainer {
+                log_offset: 0,
+                log_length: 1,
+                container_size: 0,
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::LogInReservedZone {
+                log_offset: 0x0010_0000,
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::SequenceNumberGapLarge {
+                seq1: 100,
+                seq2: 0,
+                gap: 100,
+            },
+            Warning,
+        ),
+    ];
+    for (anomaly, expected) in checks {
+        assert_eq!(
+            &anomaly.severity(),
+            expected,
+            "severity mismatch for {anomaly:?}"
+        );
+    }
+}
+
 // ── Test 20: severity levels are consistent ───────────────────────────────────
 
 #[test]
