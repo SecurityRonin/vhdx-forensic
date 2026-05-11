@@ -3,13 +3,17 @@ name = "vhdx-forensic"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
-description = "Pure-Rust read-only VHDX container reader — CONTAINER layer for forensic use"
-license = "Apache-2.0"
-repository = "https://github.com/h4x0r/vhdx-forensic"
+description = "Pure-Rust read-only VHDX container reader for forensic analysis"
+license = "MIT"
+repository = "https://github.com/SecurityRonin/vhdx-forensic"
+homepage = "https://github.com/SecurityRonin/vhdx-forensic"
+documentation = "https://docs.rs/vhdx-forensic"
+readme = "README.md"
+keywords = ["forensics", "vhdx", "disk-image", "windows", "container"]
+categories = ["parser-implementations", "filesystem"]
 
 [dependencies]
 thiserror = "2"
-memmap2 = "0.9"
 
 [dev-dependencies]
 tempfile = "3"
