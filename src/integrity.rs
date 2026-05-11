@@ -3,7 +3,8 @@ use crate::header::{
     REGION_TABLE2_OFFSET,
 };
 use crate::metadata::{
-    GUID_FILE_PARAMETERS, GUID_LOGICAL_SECTOR_SIZE, GUID_VIRTUAL_DISK_SIZE,
+    GUID_FILE_PARAMETERS, GUID_LOGICAL_SECTOR_SIZE, GUID_PARENT_LOCATOR,
+    GUID_PHYSICAL_SECTOR_SIZE, GUID_VIRTUAL_DISK_ID, GUID_VIRTUAL_DISK_SIZE,
     METADATA_TABLE_SIGNATURE,
 };
 use crate::region::{BAT_GUID, METADATA_GUID, REGION_ENTRY_SIZE, REGION_TABLE_SIGNATURE};
@@ -46,6 +47,12 @@ struct ParsedRegions {
     chunk_ratio: u64,
     has_parent:  bool,
     leave_alloc: bool,
+    /// PhysicalSectorSize from metadata, if the item is present.
+    physical_ss: Option<u32>,
+    /// VirtualDiskId (16-byte GUID) from metadata, if the item is present.
+    vdisk_id: Option<[u8; 16]>,
+    /// True when a ParentLocator metadata item was found.
+    has_parent_locator: bool,
 }
 
 /// Diagnostic severity level.
@@ -251,6 +258,40 @@ pub enum VhdxIntegrityAnomaly {
     /// parent chain.
     DifferencingDisk,
 
+    // ── Metadata deep analysis (Phase 6) ────────────────────────────────────
+    /// PhysicalSectorSize metadata item is present but its value is neither
+    /// 512 nor 4096 — the only values permitted by MS-VHDX §2.5.7.
+    PhysicalSectorSizeInvalid { sector_size: u32 },
+    /// VirtualDiskId metadata item is present but all 16 bytes are zero.
+    /// The disk identity GUID was deliberately wiped, preventing correlation
+    /// with parent chains or audit logs.
+    VirtualDiskIdAllZeros,
+    /// Two metadata item data ranges overlap within the item area. Overlapping
+    /// items are structurally impossible in a correctly written VHDX — only
+    /// direct binary manipulation can produce this state.
+    MetadataItemsOverlap {
+        item_a_offset: u32,
+        item_b_offset: u32,
+        overlap_offset: u32,
+    },
+    /// A metadata item's data range extends past the end of the metadata
+    /// region. The item cannot be safely read; indicates manual patching.
+    MetadataItemBeyondRegion {
+        item_offset: u32,
+        item_end: u32,
+        region_end: u32,
+    },
+    /// LeaveBlocksAllocated (bit 0 of FileParameters.Flags) is set in a
+    /// non-differencing disk. This flag is only valid in differencing disks;
+    /// its presence suggests post-creation cloning or image manipulation.
+    LeaveBlocksAllocatedSet,
+    /// HasParent is true (differencing disk declared) but no ParentLocator
+    /// metadata item is present. The parent chain cannot be resolved.
+    MissingParentLocator,
+    /// The declared VirtualDiskSize implies a larger BAT than exists
+    /// physically. Reads at LBAs beyond the BAT coverage will silently fail.
+    VirtualDiskSizeOverreported { declared: u64, bat_coverage: u64 },
+
     // ── BAT semantic anomalies (Phase 5) ─────────────────────────────────────
     /// The BAT region's physical size (CRC-protected region table) does not
     /// match the size implied by VirtualDiskSize and BlockSize (unprotected
@@ -390,6 +431,14 @@ impl VhdxIntegrityAnomaly {
             | Self::LogBeyondContainer { .. }
             | Self::LogInReservedZone { .. } => Severity::Error,
             Self::DirtyLog { .. } => Severity::Info,
+            Self::PhysicalSectorSizeInvalid { .. } | Self::VirtualDiskIdAllZeros => {
+                Severity::Warning
+            }
+            Self::MetadataItemsOverlap { .. }
+            | Self::MetadataItemBeyondRegion { .. }
+            | Self::MissingParentLocator
+            | Self::VirtualDiskSizeOverreported { .. } => Severity::Error,
+            Self::LeaveBlocksAllocatedSet => Severity::Warning,
         }
     }
 }
@@ -934,6 +983,9 @@ impl<'a> VhdxIntegrity<'a> {
         let mut vdisk_size: Option<u64> = None;
         let mut has_parent = false;
         let mut leave_alloc = false;
+        let mut physical_ss: Option<u32> = None;
+        let mut vdisk_id: Option<[u8; 16]> = None;
+        let mut has_parent_locator = false;
 
         let meta_start = meta_offset as usize;
         let meta_table_end = meta_start + meta_length as usize;
@@ -975,6 +1027,20 @@ impl<'a> VhdxIntegrity<'a> {
                         logical_ss = Some(u32::from_le_bytes(
                             self.data[data_start..data_start + 4].try_into().unwrap(),
                         ));
+                    } else if guid == GUID_PHYSICAL_SECTOR_SIZE
+                        && self.data.len() >= data_start + 4
+                    {
+                        physical_ss = Some(u32::from_le_bytes(
+                            self.data[data_start..data_start + 4].try_into().unwrap(),
+                        ));
+                    } else if guid == GUID_VIRTUAL_DISK_ID
+                        && self.data.len() >= data_start + 16
+                    {
+                        let mut id = [0u8; 16];
+                        id.copy_from_slice(&self.data[data_start..data_start + 16]);
+                        vdisk_id = Some(id);
+                    } else if guid == GUID_PARENT_LOCATOR {
+                        has_parent_locator = true;
                     }
                 }
             }
@@ -999,6 +1065,9 @@ impl<'a> VhdxIntegrity<'a> {
             chunk_ratio,
             has_parent,
             leave_alloc,
+            physical_ss,
+            vdisk_id,
+            has_parent_locator,
         })
     }
 

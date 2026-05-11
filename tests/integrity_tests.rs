@@ -1217,6 +1217,229 @@ fn phase3_severity_levels_correct() {
     }
 }
 
+// ── Phase 6 tests — Metadata deep analysis ───────────────────────────────────
+
+// Metadata region layout (from builder.rs):
+//   0x300000: metadata table (64 KB)
+//   0x310000: item area (64 KB)
+//
+// Table header: [0..8] sig, [8..10] reserved, [10..12] EntryCount, [12..32] reserved
+// Entry 0 (FileParameters): table[32..64]
+//   GUID [32..48], Offset [48..52]=0, Length [52..56]=8, Flags [56..60]
+// Entry 1 (VirtualDiskSize): table[64..96]
+//   GUID [64..80], Offset [80..84]=8, Length [84..88]=8, Flags [88..92]
+// Entry 2 (LogicalSectorSize): table[96..128]
+//   GUID [96..112], Offset [112..116]=16, Length [116..120]=4, Flags [120..124]
+// Entry 3 (added in tests): table[128..160]
+// Item area:
+//   items_base = 0x310000
+//   FileParameters data at [0..8], VDiskSize at [8..16], LogicalSS at [16..20]
+//   New item data at [20..] in tests
+
+const META_BASE: usize = 0x0030_0000;
+const ITEMS_BASE: usize = META_BASE + 0x10000; // 0x310000
+
+// Test 54: PhysicalSectorSize present with invalid value (1024)
+
+#[test]
+fn physical_sector_size_invalid_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+
+    // Increment EntryCount from 3 to 4.
+    image[META_BASE + 10..META_BASE + 12].copy_from_slice(&4u16.to_le_bytes());
+
+    // Entry 3 at table offset 128 (= 32 + 3*32).
+    let e3 = META_BASE + 128;
+    // GUID_PHYSICAL_SECTOR_SIZE = {CDA348C7-445D-4471-9CC9-E9885251C556}
+    let guid_pss: [u8; 16] = [
+        0xC7, 0x48, 0xA3, 0xCD, 0x5D, 0x44, 0x71, 0x44,
+        0x9C, 0xC9, 0xE9, 0x88, 0x52, 0x51, 0xC5, 0x56,
+    ];
+    image[e3..e3 + 16].copy_from_slice(&guid_pss);
+    image[e3 + 16..e3 + 20].copy_from_slice(&20u32.to_le_bytes()); // item_offset=20
+    image[e3 + 20..e3 + 24].copy_from_slice(&4u32.to_le_bytes());  // item_len=4
+    // flags and reserved stay zero
+
+    // Write invalid PhysicalSectorSize value 1024 at items_base + 20.
+    image[ITEMS_BASE + 20..ITEMS_BASE + 24].copy_from_slice(&1024u32.to_le_bytes());
+
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::PhysicalSectorSizeInvalid { sector_size: 1024 }
+        )),
+        "expected PhysicalSectorSizeInvalid(1024), got: {issues:#?}"
+    );
+}
+
+// Test 55: VirtualDiskId present but all zeros
+
+#[test]
+fn virtual_disk_id_all_zeros_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+
+    image[META_BASE + 10..META_BASE + 12].copy_from_slice(&4u16.to_le_bytes());
+    let e3 = META_BASE + 128;
+    // GUID_VIRTUAL_DISK_ID = {BECA12AB-B2E6-4523-93EF-C309E000C746}
+    let guid_vdi: [u8; 16] = [
+        0xAB, 0x12, 0xCA, 0xBE, 0xE6, 0xB2, 0x23, 0x45,
+        0x93, 0xEF, 0xC3, 0x09, 0xE0, 0x00, 0xC7, 0x46,
+    ];
+    image[e3..e3 + 16].copy_from_slice(&guid_vdi);
+    image[e3 + 16..e3 + 20].copy_from_slice(&20u32.to_le_bytes()); // item_offset=20
+    image[e3 + 20..e3 + 24].copy_from_slice(&16u32.to_le_bytes()); // item_len=16
+    // 16 bytes at items_base+20 are already zero — VirtualDiskId = [0u8;16]
+
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::VirtualDiskIdAllZeros)),
+        "expected VirtualDiskIdAllZeros, got: {issues:#?}"
+    );
+}
+
+// Test 56: two metadata items overlap in the item area
+
+#[test]
+fn metadata_items_overlap_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+
+    // Patch Entry 1 (VirtualDiskSize) item_offset from 8 to 4.
+    // Entry 0 item: [0..8]; Entry 1 item (new): [4..12] → overlap at [4..8].
+    // Entry 1 Offset field is at table[80..84] = META_BASE + 80.
+    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&4u32.to_le_bytes());
+
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::MetadataItemsOverlap { .. })),
+        "expected MetadataItemsOverlap, got: {issues:#?}"
+    );
+}
+
+// Test 57: a metadata item data range extends past the metadata region end
+
+#[test]
+fn metadata_item_beyond_region_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+
+    // Patch Entry 0 (FileParameters) Length from 8 to 0x10001.
+    // Item end = 0x310000 + 0 + 0x10001 = 0x320001 > region_end 0x320000.
+    // Entry 0 Length field is at table[52..56] = META_BASE + 52.
+    image[META_BASE + 52..META_BASE + 56].copy_from_slice(&0x0001_0001u32.to_le_bytes());
+
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::MetadataItemBeyondRegion { .. })),
+        "expected MetadataItemBeyondRegion, got: {issues:#?}"
+    );
+}
+
+// Test 58: LeaveBlocksAllocated (bit 0 of FileParameters.Flags) set in non-differencing disk
+
+#[test]
+fn leave_blocks_allocated_set_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+
+    // FileParameters Flags at items_base + 4. Set bit 0.
+    image[ITEMS_BASE + 4..ITEMS_BASE + 8].copy_from_slice(&1u32.to_le_bytes());
+
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LeaveBlocksAllocatedSet)),
+        "expected LeaveBlocksAllocatedSet, got: {issues:#?}"
+    );
+}
+
+// Test 59: HasParent=true but no ParentLocator metadata item present
+
+#[test]
+fn missing_parent_locator_detected() {
+    // Builder sets HasParent=true but never adds a ParentLocator metadata entry.
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_has_parent()
+        .build();
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::MissingParentLocator)),
+        "expected MissingParentLocator, got: {issues:#?}"
+    );
+}
+
+// Test 60: VirtualDiskSize > what the physical BAT can address
+
+#[test]
+fn virtual_disk_size_overreported_detected() {
+    // 4 MB disk: bat_length=1MB (from RT), block_size=32MB, chunk_ratio=128.
+    // max_data_blocks ≈ (131072 * 128) / 129 ≈ 130050 → bat_coverage ≈ 4 TB.
+    // Override VDS to 32 TB > 4 TB → VirtualDiskSizeOverreported.
+    let vds_32tb: u64 = 32 * (1u64 << 40);
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_meta_vdisk_size(vds_32tb)
+        .build();
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::VirtualDiskSizeOverreported { declared, .. }
+            if *declared == vds_32tb
+        )),
+        "expected VirtualDiskSizeOverreported, got: {issues:#?}"
+    );
+}
+
+// Test 61: Phase 6 severity levels
+
+#[test]
+fn phase6_severity_levels_correct() {
+    use Severity::*;
+    let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
+        (VhdxIntegrityAnomaly::PhysicalSectorSizeInvalid { sector_size: 1024 }, Warning),
+        (VhdxIntegrityAnomaly::VirtualDiskIdAllZeros, Warning),
+        (
+            VhdxIntegrityAnomaly::MetadataItemsOverlap {
+                item_a_offset: 0,
+                item_b_offset: 4,
+                overlap_offset: 4,
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::MetadataItemBeyondRegion {
+                item_offset: 0,
+                item_end: 0x1_0001,
+                region_end: 0x1_0000,
+            },
+            Error,
+        ),
+        (VhdxIntegrityAnomaly::LeaveBlocksAllocatedSet, Warning),
+        (VhdxIntegrityAnomaly::MissingParentLocator, Error),
+        (
+            VhdxIntegrityAnomaly::VirtualDiskSizeOverreported {
+                declared: 32 * (1u64 << 40),
+                bat_coverage: 1,
+            },
+            Error,
+        ),
+    ];
+    for (anomaly, expected) in checks {
+        assert_eq!(
+            &anomaly.severity(),
+            expected,
+            "severity mismatch for {anomaly:?}"
+        );
+    }
+}
+
 // ── Test 20: severity levels are consistent ───────────────────────────────────
 
 #[test]
