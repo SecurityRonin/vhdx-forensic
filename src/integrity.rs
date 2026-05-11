@@ -493,6 +493,10 @@ impl<'a> VhdxIntegrity<'a> {
             return issues;
         }
 
+        // Layer 1.5: File Identifier reserved area + inter-region gaps (Phase 7).
+        issues.extend(self.check_file_identifier_reserved());
+        issues.extend(self.check_inter_region_gaps());
+
         // Layer 2: header CRC + semantic checks.
         issues.extend(self.check_headers());
 
@@ -577,6 +581,28 @@ impl<'a> VhdxIntegrity<'a> {
             issues.extend(self.check_header_pair());
         }
 
+        // 7C: Reserved bytes [80..4096] in each CRC-valid header copy.
+        for (copy, ok, off) in [
+            (1u8, h1_ok, HEADER1_OFFSET as usize),
+            (2u8, h2_ok, HEADER2_OFFSET as usize),
+        ] {
+            if ok && self.data.len() >= off + HEADER_SIZE {
+                let header_reserved = &self.data[off + 80..off + HEADER_SIZE];
+                if header_reserved.iter().any(|&b| b != 0) {
+                    let first_nonzero = header_reserved
+                        .iter()
+                        .position(|&b| b != 0)
+                        .unwrap_or(0) as u16;
+                    let length = header_reserved.iter().filter(|&&b| b != 0).count() as u16;
+                    issues.push(VhdxIntegrityAnomaly::HeaderReservedNonZero {
+                        copy,
+                        offset_in_header: 80 + first_nonzero,
+                        length,
+                    });
+                }
+            }
+        }
+
         // Phase 2 + DirtyLog checks on the active (highest-seq) header.
         if let Some(active) = self.active_header_block() {
             // 2A: GUID validity.
@@ -653,6 +679,64 @@ impl<'a> VhdxIntegrity<'a> {
             issues.extend(self.check_region_table_pair());
         }
 
+        issues
+    }
+
+    /// Check the File Identifier reserved area (bytes 512–65535) for non-zero content.
+    pub fn check_file_identifier_reserved(&self) -> Vec<VhdxIntegrityAnomaly> {
+        let mut issues = Vec::new();
+        // File Identifier section is bytes 0..0x100000; reserved area is 512..65536.
+        const RESERVED_START: usize = 512;
+        const RESERVED_END: usize = 65536;
+        if self.data.len() < RESERVED_END {
+            return issues;
+        }
+        let reserved = &self.data[RESERVED_START..RESERVED_END];
+        let first_nonzero = reserved.iter().position(|&b| b != 0);
+        if let Some(pos) = first_nonzero {
+            let start_offset = (RESERVED_START + pos) as u64;
+            let nonzero_count =
+                reserved[pos..].iter().filter(|&&b| b != 0).count() as u64;
+            issues.push(VhdxIntegrityAnomaly::FileIdentifierReservedNonZero {
+                start_offset,
+                nonzero_count,
+            });
+        }
+        issues
+    }
+
+    /// Check for non-zero bytes in the padding gaps between fixed structural regions.
+    pub fn check_inter_region_gaps(&self) -> Vec<VhdxIntegrityAnomaly> {
+        let mut issues = Vec::new();
+        if self.data.len() < 0x0030_0000 {
+            return issues;
+        }
+
+        // Fixed structural gaps (VHDX spec §2.1):
+        //   H1 is 4096 bytes at 0x100000; H2 starts at 0x140000.
+        //   H2 is 4096 bytes at 0x140000; RT section starts at 0x200000.
+        //   RT1 is 65536 bytes at 0x200000; RT2 starts at 0x240000.
+        //   RT2 is 65536 bytes at 0x240000; first user region at ≥ 0x300000.
+        let fixed_gaps: &[(&'static str, &'static str, usize, usize)] = &[
+            ("Header1",       "Header2",       0x0010_1000, 0x0014_0000),
+            ("Header2",       "RegionTable",   0x0014_1000, 0x0020_0000),
+            ("RegionTable1",  "RegionTable2",  0x0021_0000, 0x0024_0000),
+            ("RegionTable2",  "Metadata",      0x0025_0000, 0x0030_0000),
+        ];
+        for &(from, to, gap_start, gap_end) in fixed_gaps {
+            if self.data.len() < gap_end {
+                break;
+            }
+            let gap = &self.data[gap_start..gap_end];
+            if gap.iter().any(|&b| b != 0) {
+                issues.push(VhdxIntegrityAnomaly::InterRegionGapNonZero {
+                    from_region: from,
+                    to_region: to,
+                    gap_offset: gap_start as u64,
+                    gap_size: (gap_end - gap_start) as u64,
+                });
+            }
+        }
         issues
     }
 
