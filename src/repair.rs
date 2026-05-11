@@ -1,7 +1,6 @@
 use crate::header::{crc32c, HEADER1_OFFSET, HEADER2_OFFSET, HEADER_SIZE,
                     REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET};
 use crate::integrity::{VhdxIntegrity, VhdxIntegrityAnomaly};
-use crate::region::REGION_TABLE_SIGNATURE;
 
 const REGION_TABLE_CRC_COVERAGE: usize = 65536;
 
@@ -84,11 +83,80 @@ impl VhdxRepair {
     /// Always check [`RepairReport::DISCLAIMER`] before using the resulting
     /// image in any evidentiary context.
     pub fn attempt_repair(&mut self) -> RepairReport {
-        // Stub — GREEN implementation pending.
-        RepairReport {
-            repaired: vec![],
-            cannot_repair: vec![],
+        let mut repaired = Vec::new();
+        let mut cannot_repair = Vec::new();
+
+        let issues = VhdxIntegrity::new(&self.data).analyse();
+
+        for issue in issues {
+            // Capture booleans / Copy fields before the match borrows `issue`.
+            let was_repaired = match &issue {
+                VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 1, .. } => {
+                    repaired.push(self.copy_header(2, 1));
+                    true
+                }
+                VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 2, .. } => {
+                    repaired.push(self.copy_header(1, 2));
+                    true
+                }
+                VhdxIntegrityAnomaly::RegionTableChecksumMismatch { copy: 1, .. } => {
+                    repaired.push(self.copy_region_table(2, 1));
+                    true
+                }
+                VhdxIntegrityAnomaly::RegionTableChecksumMismatch { copy: 2, .. } => {
+                    repaired.push(self.copy_region_table(1, 2));
+                    true
+                }
+                VhdxIntegrityAnomaly::BatEntryBeyondContainer { bat_index, .. } => {
+                    let idx = *bat_index;
+                    if let Some(off) = VhdxIntegrity::new(&self.data).bat_region_offset() {
+                        repaired.push(self.zero_bat_entry(off, idx));
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
+
+            if !was_repaired {
+                let reason: &'static str = match &issue {
+                    VhdxIntegrityAnomaly::BothHeaderCopiesInvalid => {
+                        "Both header copies are invalid; no valid reference copy exists to restore from"
+                    }
+                    VhdxIntegrityAnomaly::BothRegionTableCopiesInvalid => {
+                        "Both region table copies are invalid; region layout cannot be determined"
+                    }
+                    VhdxIntegrityAnomaly::DirtyLog { .. } => {
+                        "Log replay is required to reach a consistent image state; \
+                        log replay is out of scope for offline forensic analysis — \
+                        mount the image on a running Hyper-V host for automatic replay"
+                    }
+                    VhdxIntegrityAnomaly::BatEntriesOverlap { .. } => {
+                        "Overlapping BAT entries are ambiguous; cannot determine which \
+                        logical block mapping is authoritative without external reference data"
+                    }
+                    VhdxIntegrityAnomaly::HeaderCopyMismatch { .. } => {
+                        "Header field mismatch between copies requires manual forensic \
+                        analysis to determine which copy reflects the intended state"
+                    }
+                    VhdxIntegrityAnomaly::RegionTableCopyMismatch { .. } => {
+                        "Region table field mismatch between copies requires manual forensic \
+                        analysis to determine which copy reflects the intended state"
+                    }
+                    VhdxIntegrityAnomaly::DifferencingDisk => {
+                        "Differencing disk repair requires access to the full parent chain"
+                    }
+                    VhdxIntegrityAnomaly::BatEntryBeyondContainer { .. } => {
+                        "BAT region offset cannot be determined from region tables"
+                    }
+                    _ => "No automated repair strategy is available for this anomaly type",
+                };
+                cannot_repair.push(CannotRepair { anomaly: issue, reason });
+            }
         }
+
+        RepairReport { repaired, cannot_repair }
     }
 
     /// Consume the repair context and return the (possibly modified) image bytes.
@@ -102,7 +170,6 @@ impl VhdxRepair {
     }
 }
 
-#[allow(dead_code)]
 impl VhdxRepair {
     fn copy_header(&mut self, src_copy: u8, dst_copy: u8) -> RepairAction {
         let src_off = if src_copy == 1 {

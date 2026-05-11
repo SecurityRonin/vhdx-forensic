@@ -202,7 +202,11 @@ impl VhdxBuilder {
         );
 
         // BAT entries and data blocks.
-        if !self.sparse {
+        // Only write FULLY_PRESENT entries when there is actual sector data —
+        // otherwise leave BAT as all-zero (NOT_PRESENT), which is a valid
+        // sparse state. Writing FULLY_PRESENT with no allocated file space
+        // would produce BatEntryBeyondContainer on a "clean" image.
+        if !self.sparse && !self.sector_data.is_empty() {
             for block_idx in 0..data_block_count {
                 let bat_entry_idx = (block_idx + block_idx / chunk_ratio) as usize;
                 // File offset for this data block in units of 1 MB.

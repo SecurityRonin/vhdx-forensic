@@ -332,19 +332,8 @@ fn bat_entry_beyond_container_detected() {
 #[test]
 fn bat_entries_overlap_detected() {
     // 64 MB disk: 2 × 32 MB blocks → BAT[0] and BAT[1] are both data blocks.
-    // Both will be FULLY_PRESENT; give them the same 1 MB-aligned offset.
-    let offset_mb: u64 = 512; // arbitrary 512 MB offset (within our image size)
-    let entry: u64 = (offset_mb << 20) | 6;
-
-    // We need a container large enough that offset_mb*1MB is within it.
-    // build() creates a file of roughly data_start + data_block_count * block_size.
-    // For 64 MB disk / 32 MB blocks = 2 blocks → file ≈ data_start + 64 MB.
-    // data_start is ~4 MB, so file ≈ 68 MB. 512 * 1MB = 536 MB > 68 MB.
-    // That would trigger BatEntryBeyondContainer, not Overlap.
-    // Use a smaller offset instead: pick offset_mb so both entries fit in file.
-    // data_start for our builder is ~0x0040_0000 (4MB). Block 0 at data_start,
-    // block 1 at data_start + 32MB. So the normal offsets are ~4 and ~36 MB.
-    // Patch both to the same value (4 MB = 4):
+    // Patch both to the same 1 MB-aligned offset so overlap is detected.
+    // data_start is ~5MB; offset 4MB is below data_start but within the container.
     let same_mb: u64 = 4;
     let same_entry: u64 = (same_mb << 20) | 6;
 

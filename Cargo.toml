@@ -32,6 +32,11 @@ doc_markdown = "allow"
 too_many_lines = "allow"
 manual_div_ceil = "allow"
 redundant_closure_for_method_calls = "allow"
+match_same_arms = "allow"
+manual_let_else = "allow"
+cast_lossless = "allow"
+if_not_else = "allow"
+manual_range_contains = "allow"
 
 [lints.rust]
 dead_code = "allow"

@@ -6,7 +6,8 @@
 
 mod builder;
 
-use vhdx_forensic::{VhdxIntegrity, VhdxIntegrityAnomaly, VhdxRepair, RepairReport, VhdxReader, crc32c};
+use vhdx_forensic::{VhdxIntegrity, VhdxIntegrityAnomaly, VhdxRepair, RepairReport, VhdxReader,
+                   crc32c};
 
 fn recompute_header_crc(buf: &mut [u8], header_off: usize) {
     buf[header_off + 4..header_off + 8].fill(0);
@@ -142,15 +143,28 @@ fn repair_action_has_disclaimer() {
 #[test]
 fn repaired_image_opens_in_reader() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
-    image[H1 + 16] ^= 0xFF; // break H1 — prevents normal open
-    // Confirm original is unreadable.
+    image[H1 + 16] ^= 0xFF; // break H1 CRC
+    // Confirm the integrity analyser detects the anomaly.
+    let pre_issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        VhdxReader::from_bytes(image.clone()).is_err(),
-        "corrupt image should fail to open"
+        pre_issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 1, .. }
+        )),
+        "corrupt image should have HeaderChecksumMismatch(copy=1)"
     );
     let mut repair = VhdxRepair::new(image);
     repair.attempt_repair();
     let repaired = repair.into_bytes();
+    // After repair, no H1 anomaly and image opens successfully.
+    let post_issues = VhdxIntegrity::new(&repaired).analyse();
+    assert!(
+        !post_issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 1, .. }
+        )),
+        "HeaderChecksumMismatch(copy=1) should be resolved after repair"
+    );
     assert!(
         VhdxReader::from_bytes(repaired).is_ok(),
         "repaired image should open successfully"
