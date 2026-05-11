@@ -115,21 +115,20 @@ impl VhdxBuilder {
         //   <bat-addressed>      : Data blocks
 
         let metadata_offset: u64 = 0x0030_0000; // 3 MB (1MB-aligned)
-        let metadata_len: u32 = 0x0002_0000;   // 128 KB
+        let metadata_len: u32 = 0x0002_0000; // 128 KB
 
         // Compute BAT size.
         let block_size = u64::from(self.block_size);
         let data_block_count = self.virtual_disk_size.div_ceil(block_size);
         let chunk_ratio = (1u64 << 23) * u64::from(self.logical_sector_size) / block_size;
-        let total_bat_entries = data_block_count
-            + (data_block_count + chunk_ratio - 1) / chunk_ratio;
+        let total_bat_entries =
+            data_block_count + (data_block_count + chunk_ratio - 1) / chunk_ratio;
         let bat_len = (total_bat_entries * 8).next_multiple_of(0x0010_0000) as u32;
         // BAT must be at a 1MB-aligned offset (BAT entries encode offsets in MB units).
-        let bat_offset: u64 = (metadata_offset + u64::from(metadata_len))
-            .next_multiple_of(0x0010_0000);
+        let bat_offset: u64 =
+            (metadata_offset + u64::from(metadata_len)).next_multiple_of(0x0010_0000);
         // Data blocks must also start at a 1MB-aligned offset.
-        let data_start: u64 = (bat_offset + u64::from(bat_len))
-            .next_multiple_of(0x0010_0000);
+        let data_start: u64 = (bat_offset + u64::from(bat_len)).next_multiple_of(0x0010_0000);
 
         // Allocate file buffer.
         // Each data block is block_size bytes at data_start + index * block_size.
@@ -145,7 +144,10 @@ impl VhdxBuilder {
         buf[0..8].copy_from_slice(b"vhdxfile");
         // Creator string (UTF-16LE "vhdx-forensic-test\0" padded to 512 bytes).
         let creator = "vhdx-forensic-test";
-        let mut creator_utf16: Vec<u8> = creator.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let mut creator_utf16: Vec<u8> = creator
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
         creator_utf16.extend_from_slice(&[0, 0]); // null terminator
         let copy_len = creator_utf16.len().min(504);
         buf[8..8 + copy_len].copy_from_slice(&creator_utf16[..copy_len]);
@@ -255,8 +257,8 @@ impl VhdxBuilder {
         slice[0..4].copy_from_slice(b"head");
         // Checksum at [4..8] — written last.
         slice[8..16].copy_from_slice(&seq.to_le_bytes()); // SequenceNumber
-        // FileWriteGuid, DataWriteGuid, LogGuid: all zeros (acceptable for test).
-        // LogVersion = 0, Version = 1.
+                                                          // FileWriteGuid, DataWriteGuid, LogGuid: all zeros (acceptable for test).
+                                                          // LogVersion = 0, Version = 1.
         slice[64..66].copy_from_slice(&0u16.to_le_bytes()); // LogVersion
         slice[66..68].copy_from_slice(&1u16.to_le_bytes()); // Version
         slice[68..72].copy_from_slice(&0u32.to_le_bytes()); // LogLength
@@ -280,8 +282,8 @@ impl VhdxBuilder {
 
         // Entry 0: BAT  (GUID: 2DC27766-F623-4200-9D64-115E9BFD4A08)
         let bat_guid: [u8; 16] = [
-            0x66, 0x77, 0xC2, 0x2D, 0x23, 0xF6, 0x00, 0x42,
-            0x9D, 0x64, 0x11, 0x5E, 0x9B, 0xFD, 0x4A, 0x08,
+            0x66, 0x77, 0xC2, 0x2D, 0x23, 0xF6, 0x00, 0x42, 0x9D, 0x64, 0x11, 0x5E, 0x9B, 0xFD,
+            0x4A, 0x08,
         ];
         slice[16..32].copy_from_slice(&bat_guid);
         slice[32..40].copy_from_slice(&bat_offset.to_le_bytes());
@@ -290,8 +292,8 @@ impl VhdxBuilder {
 
         // Entry 1: Metadata (GUID: 8B7CA206-4790-4B9A-B8FE-575F050F886E)
         let meta_guid: [u8; 16] = [
-            0x06, 0xA2, 0x7C, 0x8B, 0x90, 0x47, 0x9A, 0x4B,
-            0xB8, 0xFE, 0x57, 0x5F, 0x05, 0x0F, 0x88, 0x6E,
+            0x06, 0xA2, 0x7C, 0x8B, 0x90, 0x47, 0x9A, 0x4B, 0xB8, 0xFE, 0x57, 0x5F, 0x05, 0x0F,
+            0x88, 0x6E,
         ];
         slice[48..64].copy_from_slice(&meta_guid);
         slice[64..72].copy_from_slice(&metadata_offset.to_le_bytes());
@@ -322,8 +324,8 @@ impl VhdxBuilder {
 
         // Entry 0: FileParameters (GUID: CAA16737-FA36-4D43-B3B6-33F0AA44E76B)
         let guid_fp: [u8; 16] = [
-            0x37, 0x67, 0xA1, 0xCA, 0x36, 0xFA, 0x43, 0x4D,
-            0xB3, 0xB6, 0x33, 0xF0, 0xAA, 0x44, 0xE7, 0x6B,
+            0x37, 0x67, 0xA1, 0xCA, 0x36, 0xFA, 0x43, 0x4D, 0xB3, 0xB6, 0x33, 0xF0, 0xAA, 0x44,
+            0xE7, 0x6B,
         ];
         table[32..48].copy_from_slice(&guid_fp);
         table[48..52].copy_from_slice(&off_file_params.to_le_bytes()); // Offset
@@ -332,8 +334,8 @@ impl VhdxBuilder {
 
         // Entry 1: VirtualDiskSize (GUID: 2FA54224-CD1B-4876-B211-5BE07A6CE32C)
         let guid_vds: [u8; 16] = [
-            0x24, 0x42, 0xA5, 0x2F, 0x1B, 0xCD, 0x76, 0x48,
-            0xB2, 0x11, 0x5B, 0xE0, 0x7A, 0x6C, 0xE3, 0x2C,
+            0x24, 0x42, 0xA5, 0x2F, 0x1B, 0xCD, 0x76, 0x48, 0xB2, 0x11, 0x5B, 0xE0, 0x7A, 0x6C,
+            0xE3, 0x2C,
         ];
         table[64..80].copy_from_slice(&guid_vds);
         table[80..84].copy_from_slice(&off_vdisk_size.to_le_bytes());
@@ -342,8 +344,8 @@ impl VhdxBuilder {
 
         // Entry 2: LogicalSectorSize (GUID: 8141BF1D-A96F-4709-BA47-F233A8FAAB5F)
         let guid_lss: [u8; 16] = [
-            0x1D, 0xBF, 0x41, 0x81, 0x6F, 0xA9, 0x09, 0x47,
-            0xBA, 0x47, 0xF2, 0x33, 0xA8, 0xFA, 0xAB, 0x5F,
+            0x1D, 0xBF, 0x41, 0x81, 0x6F, 0xA9, 0x09, 0x47, 0xBA, 0x47, 0xF2, 0x33, 0xA8, 0xFA,
+            0xAB, 0x5F,
         ];
         table[96..112].copy_from_slice(&guid_lss);
         table[112..116].copy_from_slice(&off_sector_size.to_le_bytes());

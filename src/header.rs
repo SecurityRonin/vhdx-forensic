@@ -25,7 +25,11 @@ pub fn parse_active_header(data: &[u8]) -> Result<VhdxHeader> {
     let h2 = parse_one_header(data, HEADER2_OFFSET as usize);
     match (h1, h2) {
         (Ok(a), Ok(b)) => {
-            if a.sequence_number >= b.sequence_number { Ok(a) } else { Ok(b) }
+            if a.sequence_number >= b.sequence_number {
+                Ok(a)
+            } else {
+                Ok(b)
+            }
         }
         (Ok(a), Err(_)) => Ok(a),
         (Err(_), Ok(b)) => Ok(b),
@@ -34,7 +38,9 @@ pub fn parse_active_header(data: &[u8]) -> Result<VhdxHeader> {
 }
 
 fn parse_one_header(data: &[u8], offset: usize) -> Result<VhdxHeader> {
-    let end = offset.checked_add(HEADER_SIZE).ok_or(VhdxError::NoValidHeader)?;
+    let end = offset
+        .checked_add(HEADER_SIZE)
+        .ok_or(VhdxError::NoValidHeader)?;
     if data.len() < end {
         return Err(VhdxError::NoValidHeader);
     }
@@ -48,7 +54,11 @@ fn parse_one_header(data: &[u8], offset: usize) -> Result<VhdxHeader> {
     let sequence_number = u64::from_le_bytes(slice[8..16].try_into().unwrap());
     let log_offset = u64::from_le_bytes(slice[72..80].try_into().unwrap());
     let log_length = u32::from_le_bytes(slice[68..72].try_into().unwrap());
-    Ok(VhdxHeader { sequence_number, log_offset, log_length })
+    Ok(VhdxHeader {
+        sequence_number,
+        log_offset,
+        log_length,
+    })
 }
 
 /// Validate a header block by verifying CRC32C with byte 4..8 zeroed.

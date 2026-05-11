@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::bat::Bat;
 use crate::error::{Result, VhdxError};
 use crate::header::{parse_active_header, HEADER1_OFFSET, REGION_TABLE1_OFFSET};
-use crate::metadata::{VhdxMetadata, parse_metadata};
+use crate::metadata::{parse_metadata, VhdxMetadata};
 use crate::region::parse_region_table;
 use crate::FILE_MAGIC;
 
@@ -51,9 +51,7 @@ impl VhdxReader {
 
         // 4. Parse region table (try primary, then backup).
         let regions = parse_region_table(&data, REGION_TABLE1_OFFSET as usize)
-            .or_else(|_| {
-                parse_region_table(&data, 0x0024_0000)
-            })?;
+            .or_else(|_| parse_region_table(&data, 0x0024_0000))?;
 
         // 5. Parse and validate metadata.
         let meta = parse_metadata(&data, regions.metadata.file_offset, regions.metadata.length)?;
@@ -64,9 +62,19 @@ impl VhdxReader {
         }
 
         // 6. Parse BAT.
-        let bat = Bat::parse(&data, regions.bat.file_offset, regions.bat.length, meta.clone())?;
+        let bat = Bat::parse(
+            &data,
+            regions.bat.file_offset,
+            regions.bat.length,
+            meta.clone(),
+        )?;
 
-        Ok(Self { data, bat, meta, pos: 0 })
+        Ok(Self {
+            data,
+            bat,
+            meta,
+            pos: 0,
+        })
     }
 
     /// Total virtual disk size in bytes.
@@ -100,7 +108,10 @@ impl Read for VhdxReader {
                 Ok(file_off) => {
                     let src_end = (file_off as usize).saturating_add(this_chunk);
                     if src_end > self.data.len() {
-                        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "VHDX data truncated"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "VHDX data truncated",
+                        ));
                     }
                     buf[written..written + this_chunk]
                         .copy_from_slice(&self.data[file_off as usize..src_end]);
@@ -127,7 +138,10 @@ impl Seek for VhdxReader {
             SeekFrom::End(n) => self.meta.virtual_disk_size as i64 + n,
         };
         if new_pos < 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "seek before start"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "seek before start",
+            ));
         }
         self.pos = new_pos as u64;
         Ok(self.pos)

@@ -16,7 +16,10 @@ fn rejects_bad_magic() {
     let mut data = vec![0u8; 0x50_0000];
     data[0..8].copy_from_slice(b"notvalid");
     let err = VhdxReader::from_bytes(data).unwrap_err();
-    assert!(matches!(err, VhdxError::BadMagic), "expected BadMagic, got {err:?}");
+    assert!(
+        matches!(err, VhdxError::BadMagic),
+        "expected BadMagic, got {err:?}"
+    );
 }
 
 // ── Test 2: minimal valid VHDX is accepted ────────────────────────────────────
@@ -54,7 +57,10 @@ fn read_sparse_block_returns_zeros() {
     let mut reader = VhdxReader::from_bytes(data).unwrap();
     let mut buf = [0xFFu8; 512];
     reader.read_exact(&mut buf).expect("read should succeed");
-    assert!(buf.iter().all(|&b| b == 0), "sparse block should read as zeros");
+    assert!(
+        buf.iter().all(|&b| b == 0),
+        "sparse block should read as zeros"
+    );
 }
 
 // ── Test 6: seek then read ────────────────────────────────────────────────────
@@ -69,7 +75,9 @@ fn seek_then_read() {
     let mut reader = VhdxReader::from_bytes(data).unwrap();
     reader.seek(SeekFrom::Start(sector_size)).unwrap();
     let mut buf = [0u8; 512];
-    reader.read_exact(&mut buf).expect("read at sector 1 should succeed");
+    reader
+        .read_exact(&mut buf)
+        .expect("read at sector 1 should succeed");
     assert!(
         buf.iter().all(|&b| b == pattern),
         "sector 1 should contain 0xAB pattern"
@@ -114,7 +122,11 @@ fn written_data_reads_back() {
     let mut reader = VhdxReader::from_bytes(data).unwrap();
     let mut buf = vec![0u8; 512];
     reader.read_exact(&mut buf).unwrap();
-    assert_eq!(&buf[..], &payload[..], "read-back data must match written data");
+    assert_eq!(
+        &buf[..],
+        &payload[..],
+        "read-back data must match written data"
+    );
 }
 
 // ── Test 10: multiple sequential reads span block boundaries ──────────────────

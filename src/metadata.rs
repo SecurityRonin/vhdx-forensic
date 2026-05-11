@@ -3,8 +3,8 @@ use crate::error::{Result, VhdxError};
 pub const METADATA_TABLE_SIGNATURE: &[u8; 8] = b"metadata";
 
 // Validation bounds from MS-VHDX §2.5.5.
-const BLOCK_SIZE_MIN: u32 = 1 << 20;           // 1 MB
-const BLOCK_SIZE_MAX: u32 = 256 << 20;         // 256 MB
+const BLOCK_SIZE_MIN: u32 = 1 << 20; // 1 MB
+const BLOCK_SIZE_MAX: u32 = 256 << 20; // 256 MB
 const VALID_SECTOR_SIZES: [u32; 2] = [512, 4096];
 const VIRTUAL_DISK_SIZE_MAX: u64 = 64 * (1u64 << 40); // 64 TiB
 
@@ -54,7 +54,9 @@ impl VhdxMetadata {
             ));
         }
         if self.block_size.count_ones() != 1 {
-            return Err(VhdxError::InvalidMetadata("BlockSize must be a power of two"));
+            return Err(VhdxError::InvalidMetadata(
+                "BlockSize must be a power of two",
+            ));
         }
         if !VALID_SECTOR_SIZES.contains(&self.logical_sector_size) {
             return Err(VhdxError::InvalidMetadata(
@@ -102,8 +104,10 @@ pub fn parse_metadata(data: &[u8], region_offset: u64, region_len: u32) -> Resul
         }
         let mut guid = [0u8; 16];
         guid.copy_from_slice(&region[base..base + 16]);
-        let item_offset = u32::from_le_bytes(region[base + 16..base + 20].try_into().unwrap()) as usize;
-        let item_len = u32::from_le_bytes(region[base + 20..base + 24].try_into().unwrap()) as usize;
+        let item_offset =
+            u32::from_le_bytes(region[base + 16..base + 20].try_into().unwrap()) as usize;
+        let item_len =
+            u32::from_le_bytes(region[base + 20..base + 24].try_into().unwrap()) as usize;
 
         // Item data is at region_start + 0x10000 (metadata table is 64KB) + item_offset.
         let data_start = start + 0x10000 + item_offset;
@@ -127,7 +131,8 @@ pub fn parse_metadata(data: &[u8], region_offset: u64, region_len: u32) -> Resul
     Ok(VhdxMetadata {
         block_size: block_size.ok_or(VhdxError::MetadataMissing("BlockSize"))?,
         has_parent,
-        virtual_disk_size: virtual_disk_size.ok_or(VhdxError::MetadataMissing("VirtualDiskSize"))?,
+        virtual_disk_size: virtual_disk_size
+            .ok_or(VhdxError::MetadataMissing("VirtualDiskSize"))?,
         logical_sector_size: logical_sector_size.unwrap_or(512),
     })
 }

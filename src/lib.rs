@@ -17,12 +17,12 @@
 //! - Differencing disks (HasParent=true) are not supported
 //! - Log replay is not performed (offline forensic snapshots are typically clean)
 
+mod bat;
 mod error;
 mod header;
 mod metadata;
-mod region;
-mod bat;
 mod reader;
+mod region;
 
 pub use error::{Result, VhdxError};
 pub use reader::VhdxReader;

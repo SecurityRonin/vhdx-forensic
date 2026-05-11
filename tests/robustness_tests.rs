@@ -15,8 +15,7 @@ use builder::VhdxBuilder;
 // Helper: open and assert the parse fails with the expected variant.
 macro_rules! assert_parse_err {
     ($data:expr, $pat:pat) => {{
-        let err = VhdxReader::from_bytes($data)
-            .expect_err("expected from_bytes to return Err");
+        let err = VhdxReader::from_bytes($data).expect_err("expected from_bytes to return Err");
         assert!(
             matches!(err, $pat),
             "expected {}, got {:?}",
@@ -99,7 +98,9 @@ fn virtual_disk_size_zero_is_rejected() {
 #[test]
 fn virtual_disk_size_exceeds_limit_is_rejected() {
     let beyond_64tib: u64 = 64 * (1u64 << 40) + 1;
-    let data = VhdxBuilder::new(512).with_meta_vdisk_size(beyond_64tib).build();
+    let data = VhdxBuilder::new(512)
+        .with_meta_vdisk_size(beyond_64tib)
+        .build();
     assert_parse_err!(data, VhdxError::InvalidMetadata(_));
 }
 

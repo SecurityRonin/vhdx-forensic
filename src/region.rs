@@ -51,8 +51,8 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
         return Err(VhdxError::InvalidRegionTable);
     }
     // Cap entry_count to prevent DoS via a crafted enormous value iterating over a large file.
-    let entry_count = (u32::from_le_bytes(slice[8..12].try_into().unwrap()) as usize)
-        .min(REGION_ENTRY_COUNT_MAX);
+    let entry_count =
+        (u32::from_le_bytes(slice[8..12].try_into().unwrap()) as usize).min(REGION_ENTRY_COUNT_MAX);
     let container_len = data.len();
     let mut bat: Option<RegionEntry> = None;
     let mut metadata: Option<RegionEntry> = None;
@@ -72,7 +72,11 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
         if region_end as usize > container_len {
             return Err(VhdxError::OffsetOutOfBounds);
         }
-        let entry = RegionEntry { guid, file_offset, length };
+        let entry = RegionEntry {
+            guid,
+            file_offset,
+            length,
+        };
         if guid == BAT_GUID {
             bat = Some(entry);
         } else if guid == METADATA_GUID {

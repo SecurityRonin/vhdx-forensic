@@ -27,7 +27,11 @@ impl Bat {
             let e = u64::from_le_bytes(bat_bytes[i * 8..i * 8 + 8].try_into().unwrap());
             entries.push(e);
         }
-        Ok(Self { entries, meta, bat_region_offset: bat_offset })
+        Ok(Self {
+            entries,
+            meta,
+            bat_region_offset: bat_offset,
+        })
     }
 
     /// Map a logical byte offset within the virtual disk to a file byte offset.
@@ -45,10 +49,11 @@ impl Bat {
 
         // BAT index: data blocks and sector bitmap blocks are interleaved.
         // For every `chunk_ratio` data block entries, there is 1 sector bitmap entry.
-        let bat_index = data_block_index
-            + data_block_index / chunk_ratio;
+        let bat_index = data_block_index + data_block_index / chunk_ratio;
 
-        let bat_entry = *self.entries.get(bat_index as usize)
+        let bat_entry = *self
+            .entries
+            .get(bat_index as usize)
             .ok_or(VhdxError::BlockNotPresent(data_block_index))?;
 
         let state = bat_entry & 0b111;
