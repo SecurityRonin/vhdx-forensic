@@ -385,6 +385,14 @@ impl<'a> VhdxIntegrity<'a> {
         // Layer 3.5: region layout checks (Phase 3).
         issues.extend(self.check_region_layout());
 
+        // Layer 3.6: log entry analysis (Phase 4) — only when a dirty log was found.
+        if issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::DirtyLog { .. }))
+        {
+            issues.extend(self.check_log());
+        }
+
         // Parse all region + metadata state in one pass; thread through remaining layers.
         let regions = self.parse_regions();
         let rr = regions.as_ref();
@@ -518,6 +526,91 @@ impl<'a> VhdxIntegrity<'a> {
 
         if rt1_ok && rt2_ok {
             issues.extend(self.check_region_table_pair());
+        }
+
+        issues
+    }
+
+    /// Analyse log entries for structural anomalies. Called only when a dirty
+    /// log was detected (LogLength > 0 in the active header).
+    pub fn check_log(&self) -> Vec<VhdxIntegrityAnomaly> {
+        let mut issues = Vec::new();
+        let active = match self.active_header_block() {
+            Some(h) => h,
+            None => return issues,
+        };
+        let log_length = u32::from_le_bytes(active[68..72].try_into().unwrap());
+        let log_offset = u64::from_le_bytes(active[72..80].try_into().unwrap());
+        let header_log_guid: [u8; 16] = active[48..64].try_into().unwrap();
+        if log_length == 0 {
+            return issues;
+        }
+        let log_start = log_offset as usize;
+        let log_end = log_start.saturating_add(log_length as usize);
+        if self.data.len() < log_end {
+            return issues; // already caught by LogBeyondContainer
+        }
+        let log_data = &self.data[log_start..log_end];
+
+        if log_data.iter().all(|&b| b == 0) {
+            issues.push(VhdxIntegrityAnomaly::LogZeroedButDirty {
+                log_offset,
+                log_length,
+            });
+            return issues;
+        }
+
+        let mut pos: usize = 0;
+        let mut prev_seq: Option<u64> = None;
+        while pos + 64 <= log_data.len() {
+            let entry_offset = log_offset + pos as u64;
+            let entry = &log_data[pos..];
+
+            if &entry[0..4] != b"loge" {
+                issues.push(VhdxIntegrityAnomaly::LogEntrySignatureMissing { entry_offset });
+                break;
+            }
+
+            let entry_length = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+            if entry_length < 64 || pos + entry_length > log_data.len() {
+                break;
+            }
+
+            let stored_crc = u32::from_le_bytes(entry[4..8].try_into().unwrap());
+            let mut entry_buf = log_data[pos..pos + entry_length].to_vec();
+            entry_buf[4..8].fill(0);
+            let computed_crc = crc32c(&entry_buf);
+            if computed_crc != stored_crc {
+                issues.push(VhdxIntegrityAnomaly::LogEntryCrcMismatch {
+                    entry_offset,
+                    computed: computed_crc,
+                    stored: stored_crc,
+                });
+                pos += entry_length;
+                continue;
+            }
+
+            let entry_guid: [u8; 16] = entry[32..48].try_into().unwrap();
+            if entry_guid != header_log_guid {
+                issues.push(VhdxIntegrityAnomaly::LogEntryGuidMismatch {
+                    entry_offset,
+                    entry_guid,
+                    header_guid: header_log_guid,
+                });
+            }
+
+            let seq = u64::from_le_bytes(entry[16..24].try_into().unwrap());
+            if let Some(prev) = prev_seq {
+                if seq != prev.wrapping_add(1) {
+                    issues.push(VhdxIntegrityAnomaly::LogSequenceNumberGap {
+                        at_offset: entry_offset,
+                        expected_seq: prev.wrapping_add(1),
+                        found_seq: seq,
+                    });
+                }
+            }
+            prev_seq = Some(seq);
+            pos += entry_length;
         }
 
         issues
