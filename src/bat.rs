@@ -62,7 +62,10 @@ impl Bat {
 
         // Bits 20..63 are the file offset in units of 1 MB.
         let file_offset_mb = bat_entry >> 20;
-        let file_offset = file_offset_mb * 0x0010_0000 + offset_within_block;
+        let file_offset = file_offset_mb
+            .checked_mul(0x0010_0000)
+            .and_then(|o| o.checked_add(offset_within_block))
+            .ok_or(VhdxError::AddressOverflow)?;
         Ok(file_offset)
     }
 }

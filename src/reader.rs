@@ -28,6 +28,12 @@ impl VhdxReader {
         Self::from_bytes(data)
     }
 
+    /// Minimum container size: covers magic, both headers, and both region tables.
+    ///
+    /// Region Table 2 ends at 0x250000 (2 MB + 256 KB + 64 KB). Any file smaller
+    /// than this cannot contain a structurally complete VHDX.
+    const MIN_CONTAINER_SIZE: u64 = 0x0025_0000;
+
     /// Parse a VHDX from an in-memory buffer (useful for testing).
     pub fn from_bytes(data: Vec<u8>) -> Result<Self> {
         // 1. Validate file magic.
@@ -35,23 +41,29 @@ impl VhdxReader {
             return Err(VhdxError::BadMagic);
         }
 
-        // 2. Parse active header.
+        // 2. Enforce minimum container size before any offset arithmetic.
+        if (data.len() as u64) < Self::MIN_CONTAINER_SIZE {
+            return Err(VhdxError::ContainerTooSmall(Self::MIN_CONTAINER_SIZE));
+        }
+
+        // 3. Parse active header.
         let _header = parse_active_header(&data)?;
 
-        // 3. Parse region table.
+        // 4. Parse region table (try primary, then backup).
         let regions = parse_region_table(&data, REGION_TABLE1_OFFSET as usize)
             .or_else(|_| {
                 parse_region_table(&data, 0x0024_0000)
             })?;
 
-        // 4. Parse metadata.
+        // 5. Parse and validate metadata.
         let meta = parse_metadata(&data, regions.metadata.file_offset, regions.metadata.length)?;
+        meta.validate()?;
 
         if meta.has_parent {
             return Err(VhdxError::DifferencingNotSupported);
         }
 
-        // 5. Parse BAT.
+        // 6. Parse BAT.
         let bat = Bat::parse(&data, regions.bat.file_offset, regions.bat.length, meta.clone())?;
 
         Ok(Self { data, bat, meta, pos: 0 })

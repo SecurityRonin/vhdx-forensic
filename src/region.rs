@@ -27,6 +27,13 @@ pub struct RegionTable {
     pub metadata: RegionEntry,
 }
 
+/// Maximum number of region table entries we will process.
+///
+/// The spec-defined region table size is 64 KB; with 32-byte entries that
+/// gives at most (65536 - 16) / 32 = 2047 entries. Cap at 2048 to prevent
+/// a crafted `entry_count = u32::MAX` from iterating over a large file.
+const REGION_ENTRY_COUNT_MAX: usize = 2048;
+
 pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
     if data.len() < offset + 16 {
         return Err(VhdxError::InvalidRegionTable);
@@ -43,7 +50,10 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
     if crc32c(&buf) != stored_crc {
         return Err(VhdxError::InvalidRegionTable);
     }
-    let entry_count = u32::from_le_bytes(slice[8..12].try_into().unwrap()) as usize;
+    // Cap entry_count to prevent DoS via a crafted enormous value iterating over a large file.
+    let entry_count = (u32::from_le_bytes(slice[8..12].try_into().unwrap()) as usize)
+        .min(REGION_ENTRY_COUNT_MAX);
+    let container_len = data.len();
     let mut bat: Option<RegionEntry> = None;
     let mut metadata: Option<RegionEntry> = None;
     for i in 0..entry_count {
@@ -55,6 +65,13 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
         guid.copy_from_slice(&slice[base..base + 16]);
         let file_offset = u64::from_le_bytes(slice[base + 16..base + 24].try_into().unwrap());
         let length = u32::from_le_bytes(slice[base + 24..base + 28].try_into().unwrap());
+        // Validate that the region's byte range is entirely within the container.
+        let region_end = file_offset
+            .checked_add(u64::from(length))
+            .ok_or(VhdxError::OffsetOutOfBounds)?;
+        if region_end as usize > container_len {
+            return Err(VhdxError::OffsetOutOfBounds);
+        }
         let entry = RegionEntry { guid, file_offset, length };
         if guid == BAT_GUID {
             bat = Some(entry);

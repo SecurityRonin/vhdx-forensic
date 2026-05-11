@@ -2,6 +2,12 @@ use crate::error::{Result, VhdxError};
 
 pub const METADATA_TABLE_SIGNATURE: &[u8; 8] = b"metadata";
 
+// Validation bounds from MS-VHDX §2.5.5.
+const BLOCK_SIZE_MIN: u32 = 1 << 20;           // 1 MB
+const BLOCK_SIZE_MAX: u32 = 256 << 20;         // 256 MB
+const VALID_SECTOR_SIZES: [u32; 2] = [512, 4096];
+const VIRTUAL_DISK_SIZE_MAX: u64 = 64 * (1u64 << 40); // 64 TiB
+
 // Well-known metadata item GUIDs (MS-VHDX §2.5.5).
 pub const GUID_FILE_PARAMETERS: [u8; 16] = [
     0x37, 0x67, 0xA1, 0xCA, 0x36, 0xFA, 0x43, 0x4D, 0xB3, 0xB6, 0x33, 0xF0, 0xAA, 0x44, 0xE7, 0x6B,
@@ -35,6 +41,40 @@ impl VhdxMetadata {
     /// Formula from MS-VHDX §2.3.5: (2^23 * LogicalSectorSize) / BlockSize.
     pub fn chunk_ratio(&self) -> u64 {
         (1u64 << 23) * u64::from(self.logical_sector_size) / u64::from(self.block_size)
+    }
+
+    /// Validate all metadata fields against MS-VHDX spec bounds.
+    ///
+    /// Must be called before any arithmetic that uses block_size or
+    /// logical_sector_size to prevent divide-by-zero and range violations.
+    pub fn validate(&self) -> Result<()> {
+        if self.block_size < BLOCK_SIZE_MIN || self.block_size > BLOCK_SIZE_MAX {
+            return Err(VhdxError::InvalidMetadata(
+                "BlockSize must be in [1 MB, 256 MB]",
+            ));
+        }
+        if self.block_size.count_ones() != 1 {
+            return Err(VhdxError::InvalidMetadata("BlockSize must be a power of two"));
+        }
+        if !VALID_SECTOR_SIZES.contains(&self.logical_sector_size) {
+            return Err(VhdxError::InvalidMetadata(
+                "LogicalSectorSize must be 512 or 4096",
+            ));
+        }
+        if self.virtual_disk_size == 0 {
+            return Err(VhdxError::InvalidMetadata("VirtualDiskSize cannot be zero"));
+        }
+        if self.virtual_disk_size > VIRTUAL_DISK_SIZE_MAX {
+            return Err(VhdxError::InvalidMetadata(
+                "VirtualDiskSize exceeds the 64 TiB spec limit",
+            ));
+        }
+        if self.virtual_disk_size % u64::from(self.logical_sector_size) != 0 {
+            return Err(VhdxError::InvalidMetadata(
+                "VirtualDiskSize must be a multiple of LogicalSectorSize",
+            ));
+        }
+        Ok(())
     }
 }
 
