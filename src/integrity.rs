@@ -1085,6 +1085,79 @@ impl<'a> VhdxIntegrity<'a> {
 
         if r.has_parent {
             issues.push(VhdxIntegrityAnomaly::DifferencingDisk);
+            if !r.has_parent_locator {
+                issues.push(VhdxIntegrityAnomaly::MissingParentLocator);
+            }
+        }
+
+        if r.leave_alloc && !r.has_parent {
+            issues.push(VhdxIntegrityAnomaly::LeaveBlocksAllocatedSet);
+        }
+
+        if let Some(ps) = r.physical_ss {
+            if ps != 512 && ps != 4096 {
+                issues.push(VhdxIntegrityAnomaly::PhysicalSectorSizeInvalid { sector_size: ps });
+            }
+        }
+
+        if let Some(vid) = r.vdisk_id {
+            if vid == [0u8; 16] {
+                issues.push(VhdxIntegrityAnomaly::VirtualDiskIdAllZeros);
+            }
+        }
+
+        // Scan metadata item entries for overlap and out-of-range conditions.
+        let meta_start = r.meta_offset as usize;
+        let meta_end = meta_start + r.meta_length as usize;
+        if self.data.len() >= meta_end && r.meta_length >= 8 {
+            let region = &self.data[meta_start..meta_end];
+            let region_item_area_size = r.meta_length.saturating_sub(0x10000) as usize;
+            if &region[..8] == METADATA_TABLE_SIGNATURE {
+                let count =
+                    u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
+                let mut item_ranges: Vec<(u32, u32)> = Vec::new(); // (item_offset, item_end)
+
+                for i in 0..count.min(2048) {
+                    let base = 32usize.saturating_add(i.saturating_mul(32));
+                    if base + 32 > region.len() {
+                        break;
+                    }
+                    let item_off = u32::from_le_bytes(
+                        region[base + 16..base + 20].try_into().unwrap(),
+                    );
+                    let item_len = u32::from_le_bytes(
+                        region[base + 20..base + 24].try_into().unwrap(),
+                    );
+                    let item_end = item_off.saturating_add(item_len);
+
+                    // Check: item data extends past end of metadata region's item area.
+                    if item_end as usize > region_item_area_size {
+                        issues.push(VhdxIntegrityAnomaly::MetadataItemBeyondRegion {
+                            item_offset: item_off,
+                            item_end,
+                            region_end: region_item_area_size as u32,
+                        });
+                    }
+
+                    // Collect for overlap check.
+                    item_ranges.push((item_off, item_end));
+                }
+
+                // Pairwise overlap check (O(n²) but n ≤ 2048 and metadata tables are tiny).
+                item_ranges.sort_unstable_by_key(|&(off, _)| off);
+                for w in item_ranges.windows(2) {
+                    let (a_off, a_end) = w[0];
+                    let (b_off, b_end) = w[1];
+                    if b_off < a_end && b_end > a_off {
+                        let overlap_offset = a_off.max(b_off);
+                        issues.push(VhdxIntegrityAnomaly::MetadataItemsOverlap {
+                            item_a_offset: a_off,
+                            item_b_offset: b_off,
+                            overlap_offset,
+                        });
+                    }
+                }
+            }
         }
 
         match r.block_size {
@@ -1304,6 +1377,22 @@ impl<'a> VhdxIntegrity<'a> {
                 let bat_coverage = (max_offset_mb + 1) * 0x0010_0000;
                 if bat_coverage > declared_vds {
                     issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeUnderreported {
+                        declared: declared_vds,
+                        bat_coverage,
+                    });
+                }
+            }
+        }
+
+        // VirtualDiskSizeOverreported: declared VDS implies more data blocks than
+        // the physical BAT can address (unprotected VDS vs CRC-protected bat_length).
+        if let (Some(bs), Some(declared_vds)) = (r.block_size, r.vdisk_size) {
+            if bs > 0 && chunk_ratio < CHUNK_RATIO_INVALID {
+                // Maximum data blocks supportable by the actual physical BAT.
+                let max_data_blocks = entry_count as u64 * chunk_ratio / (chunk_ratio + 1);
+                let bat_coverage = max_data_blocks * u64::from(bs);
+                if declared_vds > bat_coverage {
+                    issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeOverreported {
                         declared: declared_vds,
                         bat_coverage,
                     });
