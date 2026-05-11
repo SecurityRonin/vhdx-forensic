@@ -648,6 +648,187 @@ fn phase2_severity_levels_correct() {
     }
 }
 
+// ── Phase 5 tests ────────────────────────────────────────────────────────────
+
+// Test 47: BAT region size does not match VirtualDiskSize × BlockSize formula
+
+#[test]
+fn bat_size_metadata_mismatch_detected() {
+    // Build 4 MB disk (BAT = 1 MB from CRC-protected RT).
+    // Override VirtualDiskSize to 32 TB → expected BAT ≈ 9 MB → mismatch.
+    let vds_32tb: u64 = 32 * (1u64 << 40);
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_meta_vdisk_size(vds_32tb)
+        .build();
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::BatSizeMetadataMismatch { vdisk_size, .. }
+            if *vdisk_size == vds_32tb
+        )),
+        "expected BatSizeMetadataMismatch, got: {issues:#?}"
+    );
+}
+
+// Test 48: FULLY_PRESENT BAT entry points into Header structural zone
+
+#[test]
+fn bat_entry_in_structural_region_detected() {
+    // file_offset = 0x100000 (Header region, 1 MB into the container).
+    let bat_entry: u64 = (1u64 << 20) | 6; // offset_mb=1, FULLY_PRESENT
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_bat_patch(0, bat_entry)
+        .build();
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::BatEntryInStructuralRegion {
+                bat_index: 0,
+                collides_with: "Header",
+                ..
+            }
+        )),
+        "expected BatEntryInStructuralRegion(Header), got: {issues:#?}"
+    );
+}
+
+// Test 49: FULLY_PRESENT data block but sector bitmap is NOT_PRESENT
+
+#[test]
+fn missing_sector_bitmap_detected() {
+    // 4 MB disk with sector data → builder writes BAT[0]=FULLY_PRESENT.
+    // Sector bitmap is at BAT[chunk_ratio=128]; builder leaves it NOT_PRESENT.
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_sector_data(0, vec![0xBB; 512])
+        .build();
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::MissingSectorBitmap {
+                data_bat_index: 0,
+                bitmap_bat_index: 128,
+            }
+        )),
+        "expected MissingSectorBitmap(data=0, bitmap=128), got: {issues:#?}"
+    );
+}
+
+// Test 50: data BAT entry in UNDEFINED state (1)
+
+#[test]
+fn undefined_block_state_detected() {
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_bat_patch(0, 1u64) // state=1 = UNDEFINED
+        .build();
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::UndefinedBlockState { bat_index: 0 }
+        )),
+        "expected UndefinedBlockState(index=0), got: {issues:#?}"
+    );
+}
+
+// Test 51: UNMAPPED state (3) in a non-differencing disk
+
+#[test]
+fn unmapped_block_in_non_differencing_detected() {
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_bat_patch(0, 3u64) // state=3 = UNMAPPED
+        .build();
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::UnmappedBlockInNonDifferencing { bat_index: 0 }
+        )),
+        "expected UnmappedBlockInNonDifferencing, got: {issues:#?}"
+    );
+}
+
+// Test 52: ghost data in NOT_PRESENT BAT entry with non-zero upper bits (opt-in)
+
+#[test]
+fn ghost_data_in_absent_block_detected() {
+    // Build disk with sector data so bytes exist at the data block location.
+    // Then patch BAT[0] to NOT_PRESENT (state=0) while keeping offset bits:
+    // data_start for 4 MB disk = 5 MB → offset_mb=5. Ghost entry = 5<<20.
+    let ghost_entry: u64 = 5u64 << 20; // NOT_PRESENT (state=0), ghost offset=5MB
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_sector_data(0, vec![0xCC; 512])
+        .with_bat_patch(0, ghost_entry)
+        .build();
+    let issues = VhdxIntegrity::new(&image).check_bat_ghost_data();
+    assert!(
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::GhostDataInAbsentBlock { bat_index: 0, .. }
+        )),
+        "expected GhostDataInAbsentBlock(index=0), got: {issues:#?}"
+    );
+}
+
+// Test 53: Phase 5 severity levels
+
+#[test]
+fn phase5_severity_levels_correct() {
+    use Severity::*;
+    let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
+        (
+            VhdxIntegrityAnomaly::BatSizeMetadataMismatch {
+                bat_bytes_actual: 0,
+                bat_entries_actual: 0,
+                bat_entries_expected: 1,
+                vdisk_size: 0,
+                block_size: 0,
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::BatEntryInStructuralRegion {
+                bat_index: 0,
+                file_offset: 0,
+                collides_with: "Header",
+            },
+            Error,
+        ),
+        (
+            VhdxIntegrityAnomaly::MissingSectorBitmap {
+                data_bat_index: 0,
+                bitmap_bat_index: 0,
+            },
+            Warning,
+        ),
+        (
+            VhdxIntegrityAnomaly::UndefinedBlockState { bat_index: 0 },
+            Warning,
+        ),
+        (
+            VhdxIntegrityAnomaly::UnmappedBlockInNonDifferencing { bat_index: 0 },
+            Warning,
+        ),
+        (
+            VhdxIntegrityAnomaly::GhostDataInAbsentBlock {
+                bat_index: 0,
+                file_offset: 0,
+                nonzero_bytes: 1,
+            },
+            Warning,
+        ),
+    ];
+    for (anomaly, expected) in checks {
+        assert_eq!(
+            &anomaly.severity(),
+            expected,
+            "severity mismatch for {anomaly:?}"
+        );
+    }
+}
+
 // ── Phase 4 helpers ──────────────────────────────────────────────────────────
 
 /// Write a minimal valid 64-byte log entry at `at` with the given LogGuid and

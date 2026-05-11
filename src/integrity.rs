@@ -251,6 +251,50 @@ pub enum VhdxIntegrityAnomaly {
     /// parent chain.
     DifferencingDisk,
 
+    // ── BAT semantic anomalies (Phase 5) ─────────────────────────────────────
+    /// The BAT region's physical size (CRC-protected region table) does not
+    /// match the size implied by VirtualDiskSize and BlockSize (unprotected
+    /// metadata). One metadata field was silently modified after file creation.
+    BatSizeMetadataMismatch {
+        bat_bytes_actual: u32,
+        bat_entries_actual: usize,
+        bat_entries_expected: usize,
+        vdisk_size: u64,
+        block_size: u32,
+    },
+    /// A FULLY_PRESENT BAT entry's file offset falls inside a VHDX structural
+    /// section (File Identifier, Header, Region Table, Metadata, or Log).
+    /// This redirects virtual disk reads into structural data.
+    BatEntryInStructuralRegion {
+        bat_index: usize,
+        file_offset: u64,
+        /// `"File Identifier"`, `"Header"`, `"Region Table"`, `"Metadata"`, or `"Log"`
+        collides_with: &'static str,
+    },
+    /// A FULLY_PRESENT data block's corresponding sector bitmap slot is in
+    /// NOT_PRESENT state. Hyper-V always writes the bitmap alongside data;
+    /// this combination indicates direct BAT manipulation.
+    MissingSectorBitmap {
+        data_bat_index: usize,
+        bitmap_bat_index: usize,
+    },
+    /// A data BAT entry is in UNDEFINED state (1), only valid transiently
+    /// during block allocation. Persistence indicates an interrupted write
+    /// or direct BAT manipulation.
+    UndefinedBlockState { bat_index: usize },
+    /// A data BAT entry is in UNMAPPED state (3) in a non-differencing disk.
+    /// UNMAPPED is only valid in differencing disks.
+    UnmappedBlockInNonDifferencing { bat_index: usize },
+    /// A NOT_PRESENT BAT entry's upper bits (ghost file offset) point to a
+    /// file range that contains non-zero bytes. Content was written then the
+    /// BAT entry was zeroed without wiping the underlying storage.
+    /// Opt-in check — not included in `analyse()`; call `check_bat_ghost_data()`.
+    GhostDataInAbsentBlock {
+        bat_index: usize,
+        file_offset: u64,
+        nonzero_bytes: u64,
+    },
+
     // ── BAT anomalies — NOT CRC-protected (silent-tampering surface) ──────────
     /// A FULLY_PRESENT BAT entry's file offset points outside the container.
     /// The declared data block does not actually exist in this file.
@@ -315,6 +359,12 @@ impl VhdxIntegrityAnomaly {
             | Self::SequenceNumbersIdentical { .. }
             | Self::TrailingData { .. }
             | Self::CreatorStringAnomalous { .. } => Severity::Warning,
+            Self::BatEntryInStructuralRegion { .. }
+            | Self::BatSizeMetadataMismatch { .. } => Severity::Error,
+            Self::MissingSectorBitmap { .. }
+            | Self::UndefinedBlockState { .. }
+            | Self::UnmappedBlockInNonDifferencing { .. }
+            | Self::GhostDataInAbsentBlock { .. } => Severity::Warning,
             Self::LogEntryCrcMismatch { .. }
             | Self::LogEntryGuidMismatch { .. }
             | Self::LogSequenceNumberGap { .. } => Severity::Error,
@@ -755,6 +805,15 @@ impl<'a> VhdxIntegrity<'a> {
     /// Validate BAT entries.
     pub fn check_bat(&self) -> Vec<VhdxIntegrityAnomaly> {
         self.check_bat_inner(self.parse_regions().as_ref())
+    }
+
+    /// Opt-in ghost data scan: find NOT_PRESENT BAT entries whose upper bits
+    /// (retained file offset from a prior FULLY_PRESENT state) point to
+    /// physical file ranges that contain non-zero bytes. Not called by
+    /// `analyse()` — this check is expensive (scans physical blocks).
+    pub fn check_bat_ghost_data(&self) -> Vec<VhdxIntegrityAnomaly> {
+        // Stub — implementation added in Phase 5 GREEN.
+        Vec::new()
     }
 
     /// Detect trailing non-zero data.
