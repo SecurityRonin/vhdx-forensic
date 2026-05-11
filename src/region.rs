@@ -3,6 +3,10 @@ use crate::header::crc32c;
 
 pub const REGION_TABLE_SIGNATURE: &[u8; 4] = b"regi";
 pub const REGION_ENTRY_SIZE: usize = 32;
+/// Byte size of a region table block (CRC covers the full 64 KB).
+pub const REGION_TABLE_CRC_COVERAGE: usize = 65536;
+/// 1 MiB — the alignment granularity used throughout the VHDX format.
+pub const MB: u64 = 0x0010_0000;
 
 /// GUID bytes for the BAT region (MS-VHDX §2.3.4.1).
 pub const BAT_GUID: [u8; 16] = [

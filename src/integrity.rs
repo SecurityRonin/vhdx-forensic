@@ -7,11 +7,10 @@ use crate::metadata::{
     GUID_PHYSICAL_SECTOR_SIZE, GUID_VIRTUAL_DISK_ID, GUID_VIRTUAL_DISK_SIZE,
     METADATA_TABLE_SIGNATURE,
 };
-use crate::region::{BAT_GUID, METADATA_GUID, REGION_ENTRY_SIZE, REGION_TABLE_SIGNATURE};
+use crate::region::{BAT_GUID, MB, METADATA_GUID, REGION_ENTRY_SIZE, REGION_TABLE_CRC_COVERAGE, REGION_TABLE_SIGNATURE};
 use crate::FILE_MAGIC;
 
 const MIN_CONTAINER_SIZE: u64 = 0x0025_0000; // 2.5 MB
-const REGION_TABLE_CRC_COVERAGE: usize = 65536;
 
 // BAT payload block states (MS-VHDX §2.3.5.1).
 const PAYLOAD_BLOCK_NOT_PRESENT: u8 = 0;
@@ -26,8 +25,87 @@ const SB_BLOCK_PRESENT: u8 = 6;
 const BLOCK_SIZE_MIN: u32 = 1 << 20; // 1 MB
 const BLOCK_SIZE_MAX: u32 = 256 << 20; // 256 MB
 
-// Sentinel for chunk_ratio when it cannot be computed from metadata.
-const CHUNK_RATIO_INVALID: u64 = u64::MAX;
+// Reserved-bits mask for BAT entries: bits [3..19] must be zero (MS-VHDX §2.3.5.1).
+const BAT_RESERVED_BITS_MASK: u64 = 0x000F_FFF8;
+
+// ── Module-level helpers ──────────────────────────────────────────────────────
+
+/// Read a little-endian u16 from `s` at byte offset `o`.
+#[inline]
+fn r16(s: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes(s[o..o + 2].try_into().unwrap())
+}
+
+/// Read a little-endian u32 from `s` at byte offset `o`.
+#[inline]
+fn r32(s: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes(s[o..o + 4].try_into().unwrap())
+}
+
+/// Read a little-endian u64 from `s` at byte offset `o`.
+#[inline]
+fn r64(s: &[u8], o: usize) -> u64 {
+    u64::from_le_bytes(s[o..o + 8].try_into().unwrap())
+}
+
+/// Copy 16 bytes from `s` at offset `o` into a GUID array.
+#[inline]
+fn guid_at(s: &[u8], o: usize) -> [u8; 16] {
+    s[o..o + 16].try_into().unwrap()
+}
+
+/// Compute CRC32C of `block` with bytes 4..8 zeroed (the standard VHDX CRC field).
+fn block_crc(block: &[u8]) -> u32 {
+    let mut buf = block.to_vec();
+    buf[4..8].fill(0);
+    crc32c(&buf)
+}
+
+/// Verify CRC32C for a fixed-size structural block (header or region table).
+///
+/// Returns `Ok(())` if the signature matches and the CRC is valid.
+/// Returns `Err((computed, stored))` on any failure; both are 0 when the block
+/// is unreadable or has a wrong signature.
+fn verify_block_crc(
+    data: &[u8],
+    offset: usize,
+    size: usize,
+    sig: &[u8],
+) -> Result<(), (u32, u32)> {
+    let end = offset.checked_add(size).filter(|&e| e <= data.len()).ok_or((0u32, 0u32))?;
+    let block = &data[offset..end];
+    if !block.starts_with(sig) {
+        return Err((0, 0));
+    }
+    let stored = r32(block, 4);
+    let computed = block_crc(block);
+    if computed == stored { Ok(()) } else { Err((computed, stored)) }
+}
+
+/// Map a copy index to the corresponding header byte offset.
+#[inline]
+fn header_offset(copy: u8) -> usize {
+    if copy == 1 { HEADER1_OFFSET as usize } else { HEADER2_OFFSET as usize }
+}
+
+/// Map a copy index to the corresponding region table byte offset.
+#[inline]
+fn rt_offset(copy: u8) -> usize {
+    if copy == 1 { REGION_TABLE1_OFFSET as usize } else { REGION_TABLE2_OFFSET as usize }
+}
+
+/// Resolve a region entry GUID to its canonical name, or `None` for unknown GUIDs.
+fn region_name_for_guid(guid: &[u8; 16]) -> Option<&'static str> {
+    if guid == &BAT_GUID { Some("BAT") }
+    else if guid == &METADATA_GUID { Some("Metadata") }
+    else { None }
+}
+
+/// Byte offset of BAT entry `index` within the image given the BAT region start.
+#[inline]
+fn bat_entry_pos(bat_offset: u64, index: usize) -> usize {
+    bat_offset as usize + index * 8
+}
 
 /// Pre-parsed structural state derived from one pass over a valid region table
 /// and the metadata region. Threaded through all layer checks to avoid redundant
@@ -43,8 +121,8 @@ struct ParsedRegions {
     logical_ss:  Option<u32>,
     /// Raw VirtualDiskSize; None if absent.
     vdisk_size:  Option<u64>,
-    /// Computed from block_size/logical_ss; CHUNK_RATIO_INVALID when not computable.
-    chunk_ratio: u64,
+    /// Computed from block_size/logical_ss; `None` when not computable.
+    chunk_ratio: Option<u64>,
     has_parent:  bool,
     leave_alloc: bool,
     /// PhysicalSectorSize from metadata, if the item is present.
@@ -1301,27 +1379,22 @@ impl<'a> VhdxIntegrity<'a> {
             Some(bs) if bs > 0 => u64::from(bs),
             _ => return issues,
         };
-        let bat_start = r.bat_offset as usize;
         let bat_len = r.bat_length as usize;
         let entry_count = bat_len / 8;
         let container_size = self.data.len() as u64;
-        let chunk_ratio = r.chunk_ratio;
 
         for i in 0..entry_count {
-            let ep = bat_start + i * 8;
+            let ep = bat_entry_pos(r.bat_offset, i);
             if ep + 8 > self.data.len() {
                 break;
             }
-            let raw =
-                u64::from_le_bytes(self.data[ep..ep + 8].try_into().unwrap());
+            let raw = r64(self.data, ep);
             let state = (raw & 0b111) as u8;
             // Skip FULLY_PRESENT and sector bitmap slots.
             if state == PAYLOAD_BLOCK_FULLY_PRESENT {
                 continue;
             }
-            if chunk_ratio < CHUNK_RATIO_INVALID
-                && (i as u64 % (chunk_ratio + 1)) == chunk_ratio
-            {
+            if r.chunk_ratio.is_some_and(|cr| (i as u64 % (cr + 1)) == cr) {
                 continue;
             }
             let offset_mb = raw >> 20;
@@ -1479,10 +1552,10 @@ impl<'a> VhdxIntegrity<'a> {
 
         let chunk_ratio = match (block_size, logical_ss) {
             (Some(bs), Some(ss)) if bs > 0 && ss > 0 => {
-                (1u64 << 23) * u64::from(ss) / u64::from(bs)
+                Some((1u64 << 23) * u64::from(ss) / u64::from(bs))
             }
-            (Some(bs), None) if bs > 0 => (1u64 << 23) * 512 / u64::from(bs),
-            _ => CHUNK_RATIO_INVALID,
+            (Some(bs), None) if bs > 0 => Some((1u64 << 23) * 512 / u64::from(bs)),
+            _ => None,
         };
 
         Some(ParsedRegions {
@@ -1641,147 +1714,135 @@ impl<'a> VhdxIntegrity<'a> {
         issues
     }
 
-    fn check_bat_inner(
-        &self,
-        regions: Option<&ParsedRegions>,
-    ) -> Vec<VhdxIntegrityAnomaly> {
-        let mut issues = Vec::new();
-        let r = match regions {
-            Some(r) => r,
-            None => return issues,
-        };
-
-        let bat_start = r.bat_offset as usize;
+    fn check_bat_inner(&self, regions: Option<&ParsedRegions>) -> Vec<VhdxIntegrityAnomaly> {
+        let r = match regions { Some(r) => r, None => return vec![] };
         let bat_len = r.bat_length as usize;
-        let bat_end = bat_start.saturating_add(bat_len);
+        let bat_end = (r.bat_offset as usize).saturating_add(bat_len);
         if self.data.len() < bat_end || bat_len < 8 {
-            return issues;
+            return vec![];
         }
-
-        let container_size = self.data.len() as u64;
         let entry_count = bat_len / 8;
-        let chunk_ratio = r.chunk_ratio;
+        let container_size = self.data.len() as u64;
 
-        // 5A: BAT size formula validation.
-        if let (Some(bs), Some(vds)) = (r.block_size, r.vdisk_size) {
-            if bs > 0 && chunk_ratio < CHUNK_RATIO_INVALID {
-                let data_blocks = vds.div_ceil(u64::from(bs)) as usize;
-                let bitmap_blocks = data_blocks.div_ceil(chunk_ratio as usize);
-                let bat_entries_expected = data_blocks + bitmap_blocks;
-                let expected_bat_bytes = ((bat_entries_expected as u64 * 8)
-                    .next_multiple_of(0x0010_0000)) as u32;
-                if expected_bat_bytes != r.bat_length {
-                    issues.push(VhdxIntegrityAnomaly::BatSizeMetadataMismatch {
-                        bat_bytes_actual: r.bat_length,
-                        bat_entries_actual: entry_count,
-                        bat_entries_expected,
-                        vdisk_size: vds,
-                        block_size: bs,
-                    });
-                }
-            }
+        let mut issues = self.bat_check_size_formula(r, entry_count);
+        let (entry_issues, present) = self.bat_scan_entries(r, entry_count, container_size);
+        issues.extend(entry_issues);
+        issues.extend(Self::bat_check_coverage(r, &present, entry_count));
+        issues
+    }
+
+    /// 5A — verify BAT physical size matches what VirtualDiskSize + BlockSize imply.
+    fn bat_check_size_formula(
+        &self,
+        r: &ParsedRegions,
+        entry_count: usize,
+    ) -> Vec<VhdxIntegrityAnomaly> {
+        let (Some(bs), Some(vds), Some(cr)) = (r.block_size, r.vdisk_size, r.chunk_ratio)
+        else { return vec![] };
+        if bs == 0 { return vec![]; }
+        let data_blocks = vds.div_ceil(u64::from(bs)) as usize;
+        let bat_entries_expected = data_blocks + data_blocks.div_ceil(cr as usize);
+        let expected_bat_bytes = ((bat_entries_expected as u64 * 8).next_multiple_of(MB)) as u32;
+        if expected_bat_bytes == r.bat_length {
+            return vec![];
         }
+        vec![VhdxIntegrityAnomaly::BatSizeMetadataMismatch {
+            bat_bytes_actual: r.bat_length,
+            bat_entries_actual: entry_count,
+            bat_entries_expected,
+            vdisk_size: vds,
+            block_size: bs,
+        }]
+    }
 
-        // Precompute log zone for structural region check (5B).
+    /// Per-entry BAT scan: state checks (5B/5C/5D), structural-region redirect,
+    /// range, bitmap consistency, and alignment. Also returns sorted present-offset
+    /// list for the overlap + coverage checks that follow.
+    fn bat_scan_entries(
+        &self,
+        r: &ParsedRegions,
+        entry_count: usize,
+        container_size: u64,
+    ) -> (Vec<VhdxIntegrityAnomaly>, Vec<(u64, usize)>) {
+        let mut issues = Vec::new();
+        let mut present: Vec<(u64, usize)> = Vec::new(); // (offset_mb, bat_index)
+
+        // Precompute log zone for structural-region redirect check (5B).
         let log_zone: Option<(u64, u64)> = self.active_header_block().and_then(|h| {
-            let ll = u32::from_le_bytes(h[68..72].try_into().unwrap());
-            let lo = u64::from_le_bytes(h[72..80].try_into().unwrap());
+            let ll = r32(h, 68);
+            let lo = r64(h, 72);
             if ll > 0 { Some((lo, lo.saturating_add(u64::from(ll)))) } else { None }
         });
         let meta_end = r.meta_offset.saturating_add(u64::from(r.meta_length));
 
+        // Returns the structural zone name for a given file offset, or None.
         let structural_zone = |fo: u64| -> Option<&'static str> {
-            if fo < 0x0010_0000 { return Some("File Identifier"); }
-            if fo < 0x0020_0000 { return Some("Header"); }
-            if fo < 0x0030_0000 { return Some("Region Table"); }
+            if fo < MB           { return Some("File Identifier"); }
+            if fo < 2 * MB       { return Some("Header"); }
+            if fo < 3 * MB       { return Some("Region Table"); }
             if fo >= r.meta_offset && fo < meta_end { return Some("Metadata"); }
-            if let Some((lo, le)) = log_zone {
-                if fo >= lo && fo < le { return Some("Log"); }
-            }
+            if let Some((lo, le)) = log_zone { if fo >= lo && fo < le { return Some("Log"); } }
             None
         };
 
-        let mut present: Vec<(u64, usize)> = Vec::new();
-
         for i in 0..entry_count {
-            let entry_pos = bat_start + i * 8;
-            let raw =
-                u64::from_le_bytes(self.data[entry_pos..entry_pos + 8].try_into().unwrap());
+            let ep = bat_entry_pos(r.bat_offset, i);
+            if ep + 8 > self.data.len() { break; }
+            let raw = r64(self.data, ep);
             let state = (raw & 0b111) as u8;
-            let is_bitmap_slot = chunk_ratio < CHUNK_RATIO_INVALID
-                && (i as u64 % (chunk_ratio + 1)) == chunk_ratio;
 
+            // Sector bitmap slots use different valid states from data blocks.
+            let is_bitmap_slot = r.chunk_ratio.is_some_and(|cr| (i as u64 % (cr + 1)) == cr);
             if is_bitmap_slot {
                 if state != SB_BLOCK_NOT_PRESENT && state != SB_BLOCK_PRESENT {
-                    issues.push(VhdxIntegrityAnomaly::SectorBitmapInvalidState {
-                        bat_index: i,
-                        state,
-                    });
+                    issues.push(VhdxIntegrityAnomaly::SectorBitmapInvalidState { bat_index: i, state });
                 }
                 continue;
             }
 
-            // Data block entry.
-            if state == PAYLOAD_BLOCK_PARTIALLY_PRESENT {
-                issues.push(VhdxIntegrityAnomaly::PartiallyPresentBlock { bat_index: i });
+            // Data block state checks (5D).
+            match state {
+                PAYLOAD_BLOCK_PARTIALLY_PRESENT => {
+                    issues.push(VhdxIntegrityAnomaly::PartiallyPresentBlock { bat_index: i });
+                }
+                1 => issues.push(VhdxIntegrityAnomaly::UndefinedBlockState { bat_index: i }),
+                3 if !r.has_parent => {
+                    issues.push(VhdxIntegrityAnomaly::UnmappedBlockInNonDifferencing { bat_index: i });
+                }
+                _ => {}
             }
-            // 5D: Undefined (1) and Unmapped-in-non-differencing (3).
-            if state == 1 {
-                issues.push(VhdxIntegrityAnomaly::UndefinedBlockState { bat_index: i });
-            }
-            if state == 3 && !r.has_parent {
-                issues.push(VhdxIntegrityAnomaly::UnmappedBlockInNonDifferencing {
-                    bat_index: i,
-                });
-            }
-            if state != PAYLOAD_BLOCK_FULLY_PRESENT {
-                continue;
-            }
+            if state != PAYLOAD_BLOCK_FULLY_PRESENT { continue; }
 
-            let offset_mb = raw >> 20;
-            let file_offset = offset_mb * 0x0010_0000;
+            let offset_mb  = raw >> 20;
+            let file_offset = offset_mb * MB;
 
-            if raw & 0x000F_FFF8 != 0 {
-                issues.push(VhdxIntegrityAnomaly::BatEntryUnaligned {
-                    bat_index: i,
-                    file_offset,
-                });
+            if raw & BAT_RESERVED_BITS_MASK != 0 {
+                issues.push(VhdxIntegrityAnomaly::BatEntryUnaligned { bat_index: i, file_offset });
             }
-
-            // 5B: BAT entry in structural region.
             if let Some(zone) = structural_zone(file_offset) {
                 issues.push(VhdxIntegrityAnomaly::BatEntryInStructuralRegion {
-                    bat_index: i,
-                    file_offset,
-                    collides_with: zone,
+                    bat_index: i, file_offset, collides_with: zone,
                 });
             }
-
             if file_offset >= container_size {
                 issues.push(VhdxIntegrityAnomaly::BatEntryBeyondContainer {
-                    bat_index: i,
-                    file_offset,
-                    container_size,
+                    bat_index: i, file_offset, container_size,
                 });
                 continue;
             }
 
-            // 5C: Sector bitmap must be PRESENT when data block is PRESENT.
-            if chunk_ratio < CHUNK_RATIO_INVALID {
-                let group = i / (chunk_ratio as usize + 1);
-                let bitmap_idx = group * (chunk_ratio as usize + 1) + chunk_ratio as usize;
+            // 5C: the sector bitmap slot for this data block must also be PRESENT.
+            if let Some(cr) = r.chunk_ratio {
+                let cr_us = cr as usize;
+                let bitmap_idx = (i / (cr_us + 1)) * (cr_us + 1) + cr_us;
                 if bitmap_idx < entry_count {
-                    let bep = bat_start + bitmap_idx * 8;
-                    if bep + 8 <= self.data.len() {
-                        let braw = u64::from_le_bytes(
-                            self.data[bep..bep + 8].try_into().unwrap(),
-                        );
-                        if (braw & 0b111) as u8 == SB_BLOCK_NOT_PRESENT {
-                            issues.push(VhdxIntegrityAnomaly::MissingSectorBitmap {
-                                data_bat_index: i,
-                                bitmap_bat_index: bitmap_idx,
-                            });
-                        }
+                    let bep = bat_entry_pos(r.bat_offset, bitmap_idx);
+                    if bep + 8 <= self.data.len()
+                        && (r64(self.data, bep) & 0b111) as u8 == SB_BLOCK_NOT_PRESENT
+                    {
+                        issues.push(VhdxIntegrityAnomaly::MissingSectorBitmap {
+                            data_bat_index: i, bitmap_bat_index: bitmap_idx,
+                        });
                     }
                 }
             }
@@ -1789,45 +1850,48 @@ impl<'a> VhdxIntegrity<'a> {
             present.push((offset_mb, i));
         }
 
-        // Overlap detection.
+        // Sort by file offset to enable O(n) overlap detection.
         present.sort_unstable_by_key(|&(off, _)| off);
         for w in present.windows(2) {
             if w[0].0 == w[1].0 {
                 issues.push(VhdxIntegrityAnomaly::BatEntriesOverlap {
-                    index_a: w[0].1,
-                    index_b: w[1].1,
-                    shared_offset: w[0].0 * 0x0010_0000,
+                    index_a: w[0].1, index_b: w[1].1, shared_offset: w[0].0 * MB,
                 });
             }
         }
 
-        // VirtualDiskSizeUnderreported — highest present offset vs declared size.
-        if let (Some(bs), Some(declared_vds)) = (r.block_size, r.vdisk_size) {
-            if bs > 0 && !present.is_empty() {
-                let max_offset_mb = present.iter().map(|&(off, _)| off).max().unwrap_or(0);
-                let bat_coverage = (max_offset_mb + 1) * 0x0010_0000;
-                if bat_coverage > declared_vds {
-                    issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeUnderreported {
-                        declared: declared_vds,
-                        bat_coverage,
-                    });
-                }
+        (issues, present)
+    }
+
+    /// Cross-coverage checks against declared VirtualDiskSize:
+    /// underreported (physical data exceeds declared size) and
+    /// overreported (declared size exceeds physical BAT capacity).
+    fn bat_check_coverage(
+        r: &ParsedRegions,
+        present: &[(u64, usize)],
+        entry_count: usize,
+    ) -> Vec<VhdxIntegrityAnomaly> {
+        let mut issues = Vec::new();
+        let (Some(bs), Some(declared_vds)) = (r.block_size, r.vdisk_size) else { return issues };
+        if bs == 0 { return issues; }
+
+        if !present.is_empty() {
+            let max_mb = present.iter().map(|&(off, _)| off).max().unwrap_or(0);
+            let bat_coverage = (max_mb + 1) * MB;
+            if bat_coverage > declared_vds {
+                issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeUnderreported {
+                    declared: declared_vds, bat_coverage,
+                });
             }
         }
 
-        // VirtualDiskSizeOverreported: declared VDS implies more data blocks than
-        // the physical BAT can address (unprotected VDS vs CRC-protected bat_length).
-        if let (Some(bs), Some(declared_vds)) = (r.block_size, r.vdisk_size) {
-            if bs > 0 && chunk_ratio < CHUNK_RATIO_INVALID {
-                // Maximum data blocks supportable by the actual physical BAT.
-                let max_data_blocks = entry_count as u64 * chunk_ratio / (chunk_ratio + 1);
-                let bat_coverage = max_data_blocks * u64::from(bs);
-                if declared_vds > bat_coverage {
-                    issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeOverreported {
-                        declared: declared_vds,
-                        bat_coverage,
-                    });
-                }
+        if let Some(cr) = r.chunk_ratio {
+            let max_data_blocks = entry_count as u64 * cr / (cr + 1);
+            let bat_coverage = max_data_blocks * u64::from(bs);
+            if declared_vds > bat_coverage {
+                issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeOverreported {
+                    declared: declared_vds, bat_coverage,
+                });
             }
         }
 

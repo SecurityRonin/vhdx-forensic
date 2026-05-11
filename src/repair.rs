@@ -2,8 +2,7 @@ use crate::header::{
     crc32c, HEADER1_OFFSET, HEADER2_OFFSET, HEADER_SIZE, REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET,
 };
 use crate::integrity::{VhdxIntegrity, VhdxIntegrityAnomaly};
-
-const REGION_TABLE_CRC_COVERAGE: usize = 65536;
+use crate::region::REGION_TABLE_CRC_COVERAGE;
 
 /// A single repair action that was successfully applied to the image.
 #[derive(Debug, Clone)]
@@ -91,8 +90,11 @@ impl VhdxRepair {
         let mut issues = integrity.analyse();
         issues.extend(integrity.check_bat_ghost_data());
 
+        // Hoist BAT offset: computed once before mutations begin.
+        // NLL ends the `integrity` borrow after check_bat_ghost_data() returns.
+        let bat_offset = VhdxIntegrity::new(&self.data).bat_region_offset();
+
         for issue in issues {
-            // Capture booleans / Copy fields before the match borrows `issue`.
             let was_repaired = match &issue {
                 VhdxIntegrityAnomaly::HeaderChecksumMismatch { copy: 1, .. } => {
                     repaired.push(self.copy_header(2, 1));
@@ -112,7 +114,7 @@ impl VhdxRepair {
                 }
                 VhdxIntegrityAnomaly::BatEntryBeyondContainer { bat_index, .. } => {
                     let idx = *bat_index;
-                    if let Some(off) = VhdxIntegrity::new(&self.data).bat_region_offset() {
+                    if let Some(off) = bat_offset {
                         repaired.push(self.zero_bat_entry(off, idx));
                         true
                     } else {
@@ -121,7 +123,7 @@ impl VhdxRepair {
                 }
                 VhdxIntegrityAnomaly::BatEntryInStructuralRegion { bat_index, .. } => {
                     let idx = *bat_index;
-                    if let Some(off) = VhdxIntegrity::new(&self.data).bat_region_offset() {
+                    if let Some(off) = bat_offset {
                         repaired.push(self.zero_bat_entry(off, idx));
                         true
                     } else {
@@ -130,7 +132,7 @@ impl VhdxRepair {
                 }
                 VhdxIntegrityAnomaly::UndefinedBlockState { bat_index } => {
                     let idx = *bat_index;
-                    if let Some(off) = VhdxIntegrity::new(&self.data).bat_region_offset() {
+                    if let Some(off) = bat_offset {
                         repaired.push(self.zero_bat_entry(off, idx));
                         true
                     } else {
@@ -139,7 +141,7 @@ impl VhdxRepair {
                 }
                 VhdxIntegrityAnomaly::BatEntryUnaligned { bat_index, .. } => {
                     let idx = *bat_index;
-                    if let Some(off) = VhdxIntegrity::new(&self.data).bat_region_offset() {
+                    if let Some(off) = bat_offset {
                         repaired.push(self.clear_bat_reserved_bits(off, idx));
                         true
                     } else {
@@ -227,23 +229,19 @@ impl VhdxRepair {
 }
 
 impl VhdxRepair {
-    fn copy_header(&mut self, src_copy: u8, dst_copy: u8) -> RepairAction {
-        let src_off = if src_copy == 1 {
-            HEADER1_OFFSET as usize
-        } else {
-            HEADER2_OFFSET as usize
-        };
-        let dst_off = if dst_copy == 1 {
-            HEADER1_OFFSET as usize
-        } else {
-            HEADER2_OFFSET as usize
-        };
-        let src_bytes: Vec<u8> = self.data[src_off..src_off + HEADER_SIZE].to_vec();
-        self.data[dst_off..dst_off + HEADER_SIZE].copy_from_slice(&src_bytes);
-        // Recompute CRC for the destination.
+    /// Copy `size` bytes from `src_off` to `dst_off` and recompute the CRC32C
+    /// stored at bytes [4..8] within the destination block.
+    fn copy_block_with_crc(&mut self, src_off: usize, dst_off: usize, size: usize) {
+        self.data.copy_within(src_off..src_off + size, dst_off);
         self.data[dst_off + 4..dst_off + 8].fill(0);
-        let crc = crc32c(&self.data[dst_off..dst_off + HEADER_SIZE]);
+        let crc = crc32c(&self.data[dst_off..dst_off + size]);
         self.data[dst_off + 4..dst_off + 8].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    fn copy_header(&mut self, src_copy: u8, dst_copy: u8) -> RepairAction {
+        let src_off = header_offset(src_copy);
+        let dst_off = header_offset(dst_copy);
+        self.copy_block_with_crc(src_off, dst_off, HEADER_SIZE);
         RepairAction {
             description: format!(
                 "Replaced corrupt header copy {dst_copy} with copy {src_copy} and recomputed CRC32C"
@@ -256,23 +254,9 @@ impl VhdxRepair {
     }
 
     fn copy_region_table(&mut self, src_copy: u8, dst_copy: u8) -> RepairAction {
-        let src_off = if src_copy == 1 {
-            REGION_TABLE1_OFFSET as usize
-        } else {
-            REGION_TABLE2_OFFSET as usize
-        };
-        let dst_off = if dst_copy == 1 {
-            REGION_TABLE1_OFFSET as usize
-        } else {
-            REGION_TABLE2_OFFSET as usize
-        };
-        let src_bytes: Vec<u8> = self.data[src_off..src_off + REGION_TABLE_CRC_COVERAGE].to_vec();
-        self.data[dst_off..dst_off + REGION_TABLE_CRC_COVERAGE].copy_from_slice(&src_bytes);
-        self.data[dst_off + 4..dst_off + 8].fill(0);
-        let mut crc_buf = self.data[dst_off..dst_off + REGION_TABLE_CRC_COVERAGE].to_vec();
-        crc_buf[4..8].fill(0);
-        let crc = crc32c(&crc_buf);
-        self.data[dst_off + 4..dst_off + 8].copy_from_slice(&crc.to_le_bytes());
+        let src_off = rt_offset(src_copy);
+        let dst_off = rt_offset(dst_copy);
+        self.copy_block_with_crc(src_off, dst_off, REGION_TABLE_CRC_COVERAGE);
         RepairAction {
             description: format!(
                 "Replaced corrupt region table copy {dst_copy} with copy {src_copy} and recomputed CRC32C"
@@ -314,4 +298,14 @@ impl VhdxRepair {
                 Data the entry supposedly referenced cannot be recovered from this image.",
         }
     }
+}
+
+#[inline]
+fn header_offset(copy: u8) -> usize {
+    if copy == 1 { HEADER1_OFFSET as usize } else { HEADER2_OFFSET as usize }
+}
+
+#[inline]
+fn rt_offset(copy: u8) -> usize {
+    if copy == 1 { REGION_TABLE1_OFFSET as usize } else { REGION_TABLE2_OFFSET as usize }
 }
