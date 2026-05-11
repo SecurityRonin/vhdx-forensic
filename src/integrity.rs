@@ -467,6 +467,300 @@ impl VhdxIntegrityAnomaly {
             Self::InterRegionGapNonZero { .. } => Severity::Info,
         }
     }
+
+    /// A human-readable explanation of the forensic significance of this anomaly.
+    pub fn forensic_significance(&self) -> &'static str {
+        match self {
+            Self::BadMagic { .. } =>
+                "The 8-byte VHDX magic signature is incorrect. The file is either not a VHDX \
+                 image, was truncated before the identifier section, or the magic was overwritten \
+                 to disguise the container's true format.",
+            Self::ContainerTruncated { .. } =>
+                "The file is smaller than the minimum VHDX structural size (2.5 MB). The \
+                 container was either incompletely written, deliberately truncated to destroy \
+                 evidence, or is a stub masquerading as a full image.",
+            Self::HeaderChecksumMismatch { .. } =>
+                "A header copy's CRC32C does not match its content. The header was modified \
+                 after the last legitimate Hyper-V write — either targeted tampering or \
+                 storage-layer corruption of the most security-critical region.",
+            Self::BothHeaderCopiesInvalid =>
+                "Both redundant header copies have invalid CRC32C. The entire header region \
+                 was overwritten or corrupted, rendering the disk identity, log pointer, and \
+                 sequence numbers unverifiable.",
+            Self::SequenceNumbersIdentical { .. } =>
+                "Both header copies share the same sequence number. Hyper-V increments the \
+                 sequence number on every write cycle; identical values indicate one copy was \
+                 cloned from the other, bypassing the normal redundancy mechanism.",
+            Self::BothSequenceNumbersZero =>
+                "Both header sequence numbers are zero. A written disk always has at least one \
+                 non-zero sequence number; all-zero values suggest a manually constructed \
+                 header or a factory-reset operation outside normal Hyper-V control.",
+            Self::HeaderCopyMismatch { .. } =>
+                "Two CRC-valid header copies disagree on a named field. This is structurally \
+                 impossible through normal Hyper-V operation — one copy was patched and \
+                 re-signed after the fact to introduce conflicting disk metadata.",
+            Self::LogZeroedButDirty { .. } =>
+                "The header declares a dirty log but all log bytes are zero. This is used to \
+                 preserve the dirty-log indicator (blocking Hyper-V from mounting the disk) \
+                 while destroying the log entries that would reveal which blocks were written.",
+            Self::LogEntrySignatureMissing { .. } =>
+                "A log entry position does not contain the expected 'loge' signature. The log \
+                 region was overwritten or the log offset was manipulated to point into an \
+                 area that was never written as log data.",
+            Self::LogEntryCrcMismatch { .. } =>
+                "A log entry's CRC32C is invalid. The entry was modified after writing — log \
+                 tampering to alter the on-disk record of which blocks were changed before \
+                 the last checkpoint.",
+            Self::LogEntryGuidMismatch { .. } =>
+                "A log entry's LogGuid does not match the active header's LogGuid. The log \
+                 was transplanted from a different VHDX image, replacing the authentic \
+                 write history with entries from another disk.",
+            Self::LogSequenceNumberGap { .. } =>
+                "Consecutive log entries have a gap in sequence numbers. Entries were deleted \
+                 from the middle of the log sequence to remove evidence of specific write \
+                 operations that occurred between the surviving entries.",
+            Self::FileWriteGuidAllZeros =>
+                "The FileWriteGuid (disk-level identity GUID) is all zeros. This GUID is \
+                 updated on every write cycle and used to correlate images in audit trails; \
+                 wiping it severs the chain of custody and prevents linkage to prior captures.",
+            Self::DataWriteGuidAllZeros =>
+                "The DataWriteGuid (data-layer identity GUID) is all zeros. This GUID tracks \
+                 the data state for differencing disk chain verification; zeroing it breaks \
+                 parent-image validation and obscures whether data blocks were modified.",
+            Self::LogGuidWithNoLog { .. } =>
+                "The header contains a non-zero LogGuid but LogLength is zero. A non-zero \
+                 LogGuid with no log region indicates the log was cleared without resetting \
+                 the GUID — a sign of manual header manipulation between write cycles.",
+            Self::LogGuidAllZerosWithDirtyLog { .. } =>
+                "A non-zero LogLength exists but LogGuid is all zeros — a combination that \
+                 is structurally impossible through normal Hyper-V operation. This indicates \
+                 a manually constructed dirty-log header designed to block mounting.",
+            Self::LogVersionInvalid { .. } =>
+                "The LogVersion field is not 1, the only valid value defined by MS-VHDX. \
+                 Any other value indicates a format version violation or direct binary \
+                 patching of the header without using a legitimate VHDX writer.",
+            Self::VersionInvalid { .. } =>
+                "The Version field is not 1, the only defined VHDX format version. This \
+                 value is set at creation and never changed; an unexpected value indicates \
+                 a hand-crafted header or an attempt to trigger version-specific parser bugs.",
+            Self::LogOffsetMisaligned { .. } =>
+                "The LogOffset is not 1 MB aligned, violating the VHDX specification. \
+                 All log regions must start at MB boundaries; misalignment indicates manual \
+                 patching of the log pointer to redirect log operations to an arbitrary offset.",
+            Self::LogLengthMisaligned { .. } =>
+                "The LogLength is not a multiple of 1 MB. The specification requires MB \
+                 granularity for log regions; a misaligned length indicates direct binary \
+                 editing of the header outside any legitimate VHDX tool.",
+            Self::LogBeyondContainer { .. } =>
+                "The declared log region extends past the end of the file. The log physically \
+                 does not exist in this container; the log pointer was set to reference \
+                 data that is not present, possibly to trigger parser overflow vulnerabilities.",
+            Self::LogInReservedZone { .. } =>
+                "The LogOffset places the log inside the reserved structural zone (below \
+                 0x300000). Log replay would overwrite VHDX structural data — a log-poisoning \
+                 attack that can corrupt headers or region tables on mount.",
+            Self::SequenceNumberGapLarge { .. } =>
+                "The two valid header copies have sequence numbers differing by more than 1. \
+                 A gap larger than 1 means write cycles occurred between the two copies being \
+                 updated — one copy was patched without going through a legitimate write.",
+            Self::DirtyLog { .. } =>
+                "The active header declares a non-zero log region, indicating uncommitted \
+                 writes were present when the image was captured. This is normal for live \
+                 snapshots but means the visible data may not reflect the final committed state.",
+            Self::RegionMisaligned { .. } =>
+                "A region entry's file_offset is not 1 MB aligned. All VHDX regions must \
+                 start at MB boundaries per the specification; misalignment indicates manual \
+                 patching of the region table to redirect a structural region.",
+            Self::RegionBeyondContainer { .. } =>
+                "A declared region extends past the end of the container file. The structural \
+                 region physically does not exist; reading it would access out-of-bounds memory \
+                 — a potential parser vulnerability or evidence of container truncation.",
+            Self::RegionsOverlap { .. } =>
+                "Two declared regions (BAT and Metadata) have overlapping byte ranges. \
+                 Overlapping regions are structurally impossible in a valid VHDX — only \
+                 direct binary manipulation of the region table can produce this state.",
+            Self::LogOverlapsStructuralRegion { .. } =>
+                "The dirty-log region overlaps a structural zone. Log replay would overwrite \
+                 VHDX structural data (headers, region tables, or the file identifier) — a \
+                 targeted log-poisoning vector for corrupting parser-critical structures.",
+            Self::UnknownRequiredRegion { .. } =>
+                "A region table entry has Required=1 with an unrecognized GUID. Hyper-V \
+                 refuses to open files with unknown required regions; this state cannot \
+                 occur through legitimate tools and indicates a hand-crafted region table.",
+            Self::RegionTableReservedNonZero { .. } =>
+                "Reserved bytes in the region table are non-zero. These bytes are \
+                 CRC-protected but semantically undefined; non-zero content can carry \
+                 steganographic payloads that survive most sanitization tools.",
+            Self::RegionTableChecksumMismatch { .. } =>
+                "A region table copy's CRC32C is invalid. The region table was modified \
+                 after the last legitimate write — targeted tampering of the structure \
+                 that maps the physical layout of BAT and Metadata regions.",
+            Self::BothRegionTableCopiesInvalid =>
+                "Both redundant region table copies have invalid CRC32C. The entire \
+                 region layout is unverifiable; BAT and Metadata offsets cannot be \
+                 trusted, preventing reliable forensic decoding of the container.",
+            Self::RegionTableCopyMismatch { .. } =>
+                "Two CRC-valid region table copies disagree on a region's offset or size. \
+                 One was patched and re-signed; the copies now describe different physical \
+                 layouts, making the true data location ambiguous.",
+            Self::MetadataMissing(_) =>
+                "A required metadata item (BlockSize or VirtualDiskSize) is absent. \
+                 These items are mandatory per MS-VHDX; their absence indicates a \
+                 deliberately stripped or hand-constructed metadata table.",
+            Self::BlockSizeInvalid { .. } =>
+                "The BlockSize metadata item has an invalid value (outside [1 MB, 256 MB] \
+                 or not a power of two). An invalid block size corrupts BAT index \
+                 calculations, causing every block lookup to produce incorrect offsets.",
+            Self::LogicalSectorSizeInvalid { .. } =>
+                "The LogicalSectorSize is not 512 or 4096. Only these two values are \
+                 defined by MS-VHDX; any other value indicates metadata tampering that \
+                 breaks sector-to-LBA mapping for the entire virtual disk.",
+            Self::VirtualDiskSizeInvalid { .. } =>
+                "The VirtualDiskSize is zero, exceeds 64 TiB, or is not a multiple of \
+                 the logical sector size. An invalid size corrupts the block count used \
+                 to build the BAT index and may cause reads to access arbitrary offsets.",
+            Self::VirtualDiskSizeUnderreported { .. } =>
+                "The declared VirtualDiskSize is smaller than the range covered by \
+                 present BAT entries. Data beyond the declared size is hidden from \
+                 parsers that respect the VirtualDiskSize bound — a capacity-hiding attack.",
+            Self::DifferencingDisk =>
+                "The image declares a differencing disk parent (HasParent=true). The \
+                 full data surface cannot be recovered without the parent chain; \
+                 differencing disks are also used to split evidence across multiple files.",
+            Self::PhysicalSectorSizeInvalid { .. } =>
+                "The PhysicalSectorSize metadata item is not 512 or 4096. Only these \
+                 values are permitted by MS-VHDX §2.5.7; an invalid value indicates \
+                 direct metadata manipulation outside any legitimate VHDX writer.",
+            Self::VirtualDiskIdAllZeros =>
+                "The VirtualDiskId GUID is all zeros. This GUID is a unique disk \
+                 identity written at creation; zeroing it severs the audit trail, \
+                 prevents correlation with cloned images, and breaks chain-of-custody.",
+            Self::MetadataItemsOverlap { .. } =>
+                "Two metadata item data ranges overlap within the item area. Overlapping \
+                 items are structurally impossible without direct binary manipulation — \
+                 the ambiguous layout can be exploited to confuse different parsers.",
+            Self::MetadataItemBeyondRegion { .. } =>
+                "A metadata item's data range extends past the end of the metadata \
+                 region. The item cannot be safely read; this state indicates manual \
+                 patching of the metadata table to create out-of-bounds access conditions.",
+            Self::LeaveBlocksAllocatedSet =>
+                "The LeaveBlocksAllocated flag is set in a non-differencing disk. This \
+                 flag is only valid in differencing disks; its presence in a standalone \
+                 image suggests post-creation cloning or deliberate image manipulation.",
+            Self::MissingParentLocator =>
+                "HasParent is true but no ParentLocator metadata item is present. The \
+                 parent chain cannot be resolved, so data blocks that defer to the parent \
+                 are unreadable — the image is incomplete or the locator was stripped.",
+            Self::VirtualDiskSizeOverreported { .. } =>
+                "The declared VirtualDiskSize is larger than what the BAT can address. \
+                 Reads at LBAs beyond the BAT coverage silently fail; the declared size \
+                 is larger than the actual addressable data surface.",
+            Self::BatSizeMetadataMismatch { .. } =>
+                "The BAT region's physical size (CRC-protected) does not match the size \
+                 implied by VirtualDiskSize and BlockSize (unprotected metadata). One \
+                 metadata field was silently modified after file creation.",
+            Self::BatEntryInStructuralRegion { .. } =>
+                "A FULLY_PRESENT BAT entry's file offset falls inside a VHDX structural \
+                 section (File Identifier, Header, Region Table, Metadata, or Log). \
+                 This redirects virtual disk reads into structural data — a data-aliasing attack.",
+            Self::MissingSectorBitmap { .. } =>
+                "A FULLY_PRESENT data block's corresponding sector bitmap slot is in \
+                 NOT_PRESENT state. Hyper-V always writes the bitmap alongside data; \
+                 this combination indicates direct BAT manipulation after the write.",
+            Self::UndefinedBlockState { .. } =>
+                "A data BAT entry is in UNDEFINED state (1), which is only valid transiently \
+                 during block allocation. Persistent UNDEFINED state indicates an interrupted \
+                 write or deliberate BAT manipulation to create unreadable blocks.",
+            Self::UnmappedBlockInNonDifferencing { .. } =>
+                "A data BAT entry is in UNMAPPED state (3) in a non-differencing disk. \
+                 UNMAPPED is only valid in differencing disks; its presence indicates \
+                 direct BAT manipulation outside the defined state machine.",
+            Self::GhostDataInAbsentBlock { .. } =>
+                "A NOT_PRESENT BAT entry's ghost offset points to a file range containing \
+                 non-zero bytes. Content was written to the block then the BAT entry was \
+                 zeroed without wiping the underlying storage — a data-hiding technique.",
+            Self::BatEntryBeyondContainer { .. } =>
+                "A FULLY_PRESENT BAT entry's file offset points outside the container. \
+                 The declared data block does not exist in this file; reads will fail \
+                 or access attacker-controlled memory depending on the parser implementation.",
+            Self::BatEntryUnaligned { .. } =>
+                "A FULLY_PRESENT BAT entry's file offset is not 1 MB aligned. The \
+                 spec mandates MB alignment; a misaligned entry indicates manual patching \
+                 of the BAT to redirect a data block to a sub-MB granularity offset.",
+            Self::BatEntriesOverlap { .. } =>
+                "Two FULLY_PRESENT BAT entries map different logical blocks to the same \
+                 physical 1 MB region. The same bytes represent two different logical \
+                 blocks — a masquerading technique that makes LBA-to-physical mapping ambiguous.",
+            Self::PartiallyPresentBlock { .. } =>
+                "A data block BAT entry is in PARTIALLY_PRESENT transient state, which \
+                 should never persist in a stable image. Persistence indicates an \
+                 interrupted block allocation or deliberate injection of a transient state.",
+            Self::SectorBitmapInvalidState { .. } =>
+                "A sector bitmap BAT entry has an unexpected state value. The bitmap \
+                 slot state must be NOT_PRESENT or FULLY_PRESENT; any other value \
+                 indicates direct BAT manipulation of the bitmap tracking structure.",
+            Self::TrailingData { .. } =>
+                "Non-zero bytes exist between the end of the last BAT-addressed data block \
+                 and the physical end of the file. This region is outside the BAT-mapped \
+                 address space and invisible to virtual disk parsers — a steganographic \
+                 channel for concealing data after the nominal end of the disk image.",
+            Self::CreatorStringAnomalous { .. } =>
+                "The File Identifier creator string contains an anomaly inconsistent with \
+                 legitimate VHDX tools. The creator string is not CRC-protected in older \
+                 format versions and is a low-visibility field for tool-fingerprint spoofing.",
+            Self::FileIdentifierReservedNonZero { .. } =>
+                "Non-zero bytes exist in the reserved area of the File Identifier section \
+                 (bytes 512–65535, after the creator string). Normal parsers skip this \
+                 area entirely — it is a low-visibility location for data hiding or \
+                 steganographic payloads that survive most forensic sanitization tools.",
+            Self::InterRegionGapNonZero { .. } =>
+                "Non-zero bytes exist in a padding gap between two adjacent structural \
+                 regions. Hyper-V zeros these gaps at creation; non-zero content indicates \
+                 data hiding or a partial-write artifact from an abnormal shutdown.",
+            Self::HeaderReservedNonZero { .. } =>
+                "Non-zero bytes exist in the reserved portion of a valid header copy. \
+                 These bytes are CRC-protected but not semantically defined — an attacker \
+                 can write arbitrary data there and update the CRC to produce a structurally \
+                 valid header that carries hidden content undetected by integrity checkers.",
+        }
+    }
+
+    /// MITRE ATT&CK technique IDs associated with this anomaly.
+    ///
+    /// Returns an empty slice for anomalies with no established ATT&CK mapping
+    /// (e.g. pure structural corruption that has no deception intent).
+    pub fn mitre_techniques(&self) -> &'static [&'static str] {
+        match self {
+            Self::TrailingData { .. } | Self::GhostDataInAbsentBlock { .. } =>
+                &["T1564.001"],
+            Self::FileIdentifierReservedNonZero { .. }
+            | Self::HeaderReservedNonZero { .. }
+            | Self::BatEntryInStructuralRegion { .. } =>
+                &["T1027"],
+            Self::LogSequenceNumberGap { .. }
+            | Self::FileWriteGuidAllZeros
+            | Self::DataWriteGuidAllZeros
+            | Self::LogZeroedButDirty { .. } =>
+                &["T1070"],
+            Self::LogEntryGuidMismatch { .. } => &["T1070.003"],
+            Self::BatEntriesOverlap { .. } => &["T1036"],
+            Self::VirtualDiskSizeUnderreported { .. } => &["T1564"],
+            Self::InterRegionGapNonZero { .. } => &["T1564.001"],
+            _ => &[],
+        }
+    }
+}
+
+/// Aggregated counts from a slice of anomalies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalysisSummary {
+    pub total: usize,
+    pub critical: usize,
+    pub error: usize,
+    pub warning: usize,
+    pub info: usize,
+    /// The highest severity present, or `None` if the input was empty.
+    pub highest: Option<Severity>,
 }
 
 /// Read-only forensic analyser for a VHDX byte image.
@@ -480,6 +774,33 @@ pub struct VhdxIntegrity<'a> {
 impl<'a> VhdxIntegrity<'a> {
     pub fn new(data: &'a [u8]) -> Self {
         Self { data }
+    }
+
+    /// Aggregate anomaly counts from a slice.
+    pub fn summary(anomalies: &[VhdxIntegrityAnomaly]) -> AnalysisSummary {
+        let mut s = AnalysisSummary {
+            total: 0,
+            critical: 0,
+            error: 0,
+            warning: 0,
+            info: 0,
+            highest: None,
+        };
+        for a in anomalies {
+            s.total += 1;
+            let sev = a.severity();
+            match sev {
+                Severity::Critical => s.critical += 1,
+                Severity::Error => s.error += 1,
+                Severity::Warning => s.warning += 1,
+                Severity::Info => s.info += 1,
+            }
+            s.highest = Some(match s.highest.take() {
+                None => sev,
+                Some(h) => h.max(sev),
+            });
+        }
+        s
     }
 
     /// Run all integrity checks and return the complete list of findings.

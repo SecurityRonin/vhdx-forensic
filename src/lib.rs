@@ -28,7 +28,15 @@ pub mod repair;
 
 pub use error::{Result, VhdxError};
 pub use header::crc32c;
-pub use integrity::{Severity, VhdxIntegrity, VhdxIntegrityAnomaly};
+pub use integrity::{AnalysisSummary, Severity, VhdxIntegrity, VhdxIntegrityAnomaly};
+
+/// Return references to all anomalies whose severity is at or above `min`.
+pub fn anomalies_at_least<'a>(
+    anomalies: &'a [VhdxIntegrityAnomaly],
+    min: Severity,
+) -> Vec<&'a VhdxIntegrityAnomaly> {
+    anomalies.iter().filter(|a| a.severity() >= min).collect()
+}
 pub use reader::VhdxReader;
 pub use repair::{CannotRepair, RepairAction, RepairReport, VhdxRepair};
 
