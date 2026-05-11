@@ -812,8 +812,60 @@ impl<'a> VhdxIntegrity<'a> {
     /// physical file ranges that contain non-zero bytes. Not called by
     /// `analyse()` — this check is expensive (scans physical blocks).
     pub fn check_bat_ghost_data(&self) -> Vec<VhdxIntegrityAnomaly> {
-        // Stub — implementation added in Phase 5 GREEN.
-        Vec::new()
+        let mut issues = Vec::new();
+        let r = match self.parse_regions() {
+            Some(r) => r,
+            None => return issues,
+        };
+        let bs = match r.block_size {
+            Some(bs) if bs > 0 => u64::from(bs),
+            _ => return issues,
+        };
+        let bat_start = r.bat_offset as usize;
+        let bat_len = r.bat_length as usize;
+        let entry_count = bat_len / 8;
+        let container_size = self.data.len() as u64;
+        let chunk_ratio = r.chunk_ratio;
+
+        for i in 0..entry_count {
+            let ep = bat_start + i * 8;
+            if ep + 8 > self.data.len() {
+                break;
+            }
+            let raw =
+                u64::from_le_bytes(self.data[ep..ep + 8].try_into().unwrap());
+            let state = (raw & 0b111) as u8;
+            // Skip FULLY_PRESENT and sector bitmap slots.
+            if state == PAYLOAD_BLOCK_FULLY_PRESENT {
+                continue;
+            }
+            if chunk_ratio < CHUNK_RATIO_INVALID
+                && (i as u64 % (chunk_ratio + 1)) == chunk_ratio
+            {
+                continue;
+            }
+            let offset_mb = raw >> 20;
+            if offset_mb == 0 {
+                continue; // no ghost offset retained
+            }
+            let file_offset = offset_mb * 0x0010_0000;
+            if file_offset >= container_size {
+                continue;
+            }
+            let block_end = file_offset.saturating_add(bs).min(container_size);
+            let nonzero_bytes = self.data[file_offset as usize..block_end as usize]
+                .iter()
+                .filter(|&&b| b != 0)
+                .count() as u64;
+            if nonzero_bytes > 0 {
+                issues.push(VhdxIntegrityAnomaly::GhostDataInAbsentBlock {
+                    bat_index: i,
+                    file_offset,
+                    nonzero_bytes,
+                });
+            }
+        }
+        issues
     }
 
     /// Detect trailing non-zero data.
@@ -1037,6 +1089,45 @@ impl<'a> VhdxIntegrity<'a> {
         let entry_count = bat_len / 8;
         let chunk_ratio = r.chunk_ratio;
 
+        // 5A: BAT size formula validation.
+        if let (Some(bs), Some(vds)) = (r.block_size, r.vdisk_size) {
+            if bs > 0 && chunk_ratio < CHUNK_RATIO_INVALID {
+                let data_blocks = vds.div_ceil(u64::from(bs)) as usize;
+                let bitmap_blocks = data_blocks.div_ceil(chunk_ratio as usize);
+                let bat_entries_expected = data_blocks + bitmap_blocks;
+                let expected_bat_bytes = ((bat_entries_expected as u64 * 8)
+                    .next_multiple_of(0x0010_0000)) as u32;
+                if expected_bat_bytes != r.bat_length {
+                    issues.push(VhdxIntegrityAnomaly::BatSizeMetadataMismatch {
+                        bat_bytes_actual: r.bat_length,
+                        bat_entries_actual: entry_count,
+                        bat_entries_expected,
+                        vdisk_size: vds,
+                        block_size: bs,
+                    });
+                }
+            }
+        }
+
+        // Precompute log zone for structural region check (5B).
+        let log_zone: Option<(u64, u64)> = self.active_header_block().and_then(|h| {
+            let ll = u32::from_le_bytes(h[68..72].try_into().unwrap());
+            let lo = u64::from_le_bytes(h[72..80].try_into().unwrap());
+            if ll > 0 { Some((lo, lo.saturating_add(u64::from(ll)))) } else { None }
+        });
+        let meta_end = r.meta_offset.saturating_add(u64::from(r.meta_length));
+
+        let structural_zone = |fo: u64| -> Option<&'static str> {
+            if fo < 0x0010_0000 { return Some("File Identifier"); }
+            if fo < 0x0020_0000 { return Some("Header"); }
+            if fo < 0x0030_0000 { return Some("Region Table"); }
+            if fo >= r.meta_offset && fo < meta_end { return Some("Metadata"); }
+            if let Some((lo, le)) = log_zone {
+                if fo >= lo && fo < le { return Some("Log"); }
+            }
+            None
+        };
+
         let mut present: Vec<(u64, usize)> = Vec::new();
 
         for i in 0..entry_count {
@@ -1061,6 +1152,15 @@ impl<'a> VhdxIntegrity<'a> {
             if state == PAYLOAD_BLOCK_PARTIALLY_PRESENT {
                 issues.push(VhdxIntegrityAnomaly::PartiallyPresentBlock { bat_index: i });
             }
+            // 5D: Undefined (1) and Unmapped-in-non-differencing (3).
+            if state == 1 {
+                issues.push(VhdxIntegrityAnomaly::UndefinedBlockState { bat_index: i });
+            }
+            if state == 3 && !r.has_parent {
+                issues.push(VhdxIntegrityAnomaly::UnmappedBlockInNonDifferencing {
+                    bat_index: i,
+                });
+            }
             if state != PAYLOAD_BLOCK_FULLY_PRESENT {
                 continue;
             }
@@ -1075,6 +1175,15 @@ impl<'a> VhdxIntegrity<'a> {
                 });
             }
 
+            // 5B: BAT entry in structural region.
+            if let Some(zone) = structural_zone(file_offset) {
+                issues.push(VhdxIntegrityAnomaly::BatEntryInStructuralRegion {
+                    bat_index: i,
+                    file_offset,
+                    collides_with: zone,
+                });
+            }
+
             if file_offset >= container_size {
                 issues.push(VhdxIntegrityAnomaly::BatEntryBeyondContainer {
                     bat_index: i,
@@ -1082,6 +1191,26 @@ impl<'a> VhdxIntegrity<'a> {
                     container_size,
                 });
                 continue;
+            }
+
+            // 5C: Sector bitmap must be PRESENT when data block is PRESENT.
+            if chunk_ratio < CHUNK_RATIO_INVALID {
+                let group = i / (chunk_ratio as usize + 1);
+                let bitmap_idx = group * (chunk_ratio as usize + 1) + chunk_ratio as usize;
+                if bitmap_idx < entry_count {
+                    let bep = bat_start + bitmap_idx * 8;
+                    if bep + 8 <= self.data.len() {
+                        let braw = u64::from_le_bytes(
+                            self.data[bep..bep + 8].try_into().unwrap(),
+                        );
+                        if (braw & 0b111) as u8 == SB_BLOCK_NOT_PRESENT {
+                            issues.push(VhdxIntegrityAnomaly::MissingSectorBitmap {
+                                data_bat_index: i,
+                                bitmap_bat_index: bitmap_idx,
+                            });
+                        }
+                    }
+                }
             }
 
             present.push((offset_mb, i));
