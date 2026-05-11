@@ -1581,3 +1581,76 @@ fn severity_levels_are_sane() {
         );
     }
 }
+
+// ── Phase 9: robustness / no-panic tests ─────────────────────────────────────
+
+// Test: analyse() must not panic when a region table has a valid CRC but the
+// metadata region file_offset is near u64::MAX, causing meta_start + meta_length
+// to overflow usize in debug mode.
+#[test]
+fn analyse_does_not_panic_on_extreme_meta_region_offset() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Entry 1 (Metadata) in RT1: file_offset is at byte RT1+64.
+    // Set to 0xFFFF_FFFF_FFFF_0000; keep meta_length at the original 0x20000.
+    // Adding: 0xFFFF_FFFF_FFFF_0000 + 0x20000 overflows u64 — causes panic without fix.
+    let extreme_offset: u64 = 0xFFFF_FFFF_FFFF_0000;
+    image[RT1 + 64..RT1 + 72].copy_from_slice(&extreme_offset.to_le_bytes());
+    recompute_rt_crc(&mut image, RT1);
+    // Must not panic — saturating arithmetic should handle the extreme offset gracefully.
+    let issues = VhdxIntegrity::new(&image).analyse();
+    // The extreme offset must appear as an anomaly (beyond the container).
+    assert!(
+        !issues.is_empty(),
+        "expected at least one anomaly from extreme meta offset"
+    );
+}
+
+// Test: analyse() must not panic when a region table has a valid CRC but the
+// BAT region file_offset causes similar extreme-value arithmetic. (Regression
+// for the saturating_add fix on the BAT path — already protected, verify stays so.)
+#[test]
+fn analyse_does_not_panic_on_extreme_bat_region_offset() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Entry 0 (BAT) in RT1: file_offset is at byte RT1+32.
+    let extreme_offset: u64 = 0xFFFF_FFFF_FFFF_0000;
+    image[RT1 + 32..RT1 + 40].copy_from_slice(&extreme_offset.to_le_bytes());
+    recompute_rt_crc(&mut image, RT1);
+    let issues = VhdxIntegrity::new(&image).analyse();
+    assert!(
+        !issues.is_empty(),
+        "expected at least one anomaly from extreme BAT offset"
+    );
+}
+
+// Test: analyse() must not panic when metadata entry_count is near u16::MAX
+// (exercises the min(2048) cap and bounds-check in the metadata table loop).
+#[test]
+fn analyse_does_not_panic_on_huge_metadata_entry_count() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    const META_BASE: usize = 0x0030_0000;
+    // Metadata table entry_count is at META_BASE + 10..12 (u16 LE).
+    image[META_BASE + 10..META_BASE + 12].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    // No panic is the only requirement.
+    let _ = VhdxIntegrity::new(&image).analyse();
+}
+
+// Test: analyse() must not panic when block_size = 0 in metadata (chunk_ratio
+// falls back to CHUNK_RATIO_INVALID — sentinel that disables bitmap-slot detection).
+#[test]
+fn analyse_does_not_panic_when_block_size_is_zero() {
+    let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
+        .with_meta_block_size(0)
+        .build();
+    let _ = VhdxIntegrity::new(&image).analyse();
+}
+
+// Test: analyse() must not panic when a metadata item has item_offset = u32::MAX
+// (exercises the checked_add chain that returns None → item skipped).
+#[test]
+fn analyse_does_not_panic_on_extreme_metadata_item_offset() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    const META_BASE: usize = 0x0030_0000;
+    // Entry 0 item_offset field is at META_BASE + 48 (32 table header + 16 GUID).
+    image[META_BASE + 48..META_BASE + 52].copy_from_slice(&u32::MAX.to_le_bytes());
+    let _ = VhdxIntegrity::new(&image).analyse();
+}
