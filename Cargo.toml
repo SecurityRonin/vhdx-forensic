@@ -2,7 +2,7 @@
 name = "vhdx-forensic"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.85"
 description = "Pure-Rust read-only VHDX container reader for forensic analysis"
 license = "MIT"
 repository = "https://github.com/SecurityRonin/vhdx-forensic"
