@@ -349,6 +349,9 @@ impl<'a> VhdxIntegrity<'a> {
             return issues;
         }
 
+        // Layer 3.5: region layout checks (Phase 3).
+        issues.extend(self.check_region_layout());
+
         // Parse all region + metadata state in one pass; thread through remaining layers.
         let regions = self.parse_regions();
         let rr = regions.as_ref();
@@ -364,6 +367,9 @@ impl<'a> VhdxIntegrity<'a> {
 
         issues
     }
+
+    // Reserved zone below the metadata region (FileIdentifier + headers + region tables).
+    const LOG_RESERVED_ZONE_END: u64 = 0x0030_0000;
 
     // ── Public check functions ────────────────────────────────────────────────
 
@@ -479,6 +485,137 @@ impl<'a> VhdxIntegrity<'a> {
 
         if rt1_ok && rt2_ok {
             issues.extend(self.check_region_table_pair());
+        }
+
+        issues
+    }
+
+    /// Check region entry alignment, range, overlap, reserved fields, and
+    /// unknown required entries. Called after CRC validity is confirmed.
+    pub fn check_region_layout(&self) -> Vec<VhdxIntegrityAnomaly> {
+        let mut issues = Vec::new();
+
+        // Use the first CRC-valid RT copy for entry scanning.
+        let rt_info = [(REGION_TABLE1_OFFSET as usize, 1u8), (REGION_TABLE2_OFFSET as usize, 2u8)];
+        let (rt_off, copy) = match rt_info
+            .iter()
+            .find(|&&(_, c)| self.check_single_rt_crc(c).is_none())
+        {
+            Some(&x) => x,
+            None => return issues,
+        };
+        let rt = &self.data[rt_off..rt_off + REGION_TABLE_CRC_COVERAGE];
+        let container_size = self.data.len() as u64;
+
+        // 3D: Reserved bytes 12–15 of RT header.
+        let header_reserved = u32::from_le_bytes(rt[12..16].try_into().unwrap());
+        if header_reserved != 0 {
+            issues.push(VhdxIntegrityAnomaly::RegionTableReservedNonZero {
+                copy,
+                location: "header",
+                value: header_reserved,
+            });
+        }
+
+        let entry_count =
+            (u32::from_le_bytes(rt[8..12].try_into().unwrap()) as usize).min(2048);
+        let mut known: Vec<(&'static str, u64, u64)> = Vec::new(); // (name, start, end)
+
+        for i in 0..entry_count {
+            let base = 16 + i * REGION_ENTRY_SIZE;
+            if base + REGION_ENTRY_SIZE > rt.len() {
+                break;
+            }
+            let mut guid = [0u8; 16];
+            guid.copy_from_slice(&rt[base..base + 16]);
+            let file_offset =
+                u64::from_le_bytes(rt[base + 16..base + 24].try_into().unwrap());
+            let length = u32::from_le_bytes(rt[base + 24..base + 28].try_into().unwrap());
+            let required_field =
+                u32::from_le_bytes(rt[base + 28..base + 32].try_into().unwrap());
+
+            // 3D: Reserved bits 1–31 of the Required word.
+            let reserved_bits = required_field & !1u32;
+            if reserved_bits != 0 {
+                issues.push(VhdxIntegrityAnomaly::RegionTableReservedNonZero {
+                    copy,
+                    location: "entry",
+                    value: reserved_bits,
+                });
+            }
+
+            let region_name: &'static str = if guid == BAT_GUID {
+                "BAT"
+            } else if guid == METADATA_GUID {
+                "Metadata"
+            } else {
+                // 3C: Unknown required region.
+                if required_field & 1 != 0 {
+                    let guid_hex: String =
+                        guid.iter().map(|b| format!("{b:02x}")).collect();
+                    issues.push(VhdxIntegrityAnomaly::UnknownRequiredRegion { guid_hex });
+                }
+                continue;
+            };
+
+            // 3A: 1 MB alignment.
+            if file_offset % 0x0010_0000 != 0 {
+                issues.push(VhdxIntegrityAnomaly::RegionMisaligned {
+                    region: region_name,
+                    file_offset,
+                });
+            }
+
+            // 3A: Range within container.
+            let declared_end = file_offset.saturating_add(u64::from(length));
+            if declared_end > container_size {
+                issues.push(VhdxIntegrityAnomaly::RegionBeyondContainer {
+                    region: region_name,
+                    declared_end,
+                    container_size,
+                });
+            }
+
+            known.push((region_name, file_offset, declared_end));
+        }
+
+        // 3B: Pairwise overlap between known (BAT/Metadata) regions.
+        for i in 0..known.len() {
+            for j in (i + 1)..known.len() {
+                let (name_a, start_a, end_a) = known[i];
+                let (name_b, start_b, end_b) = known[j];
+                let overlap_start = start_a.max(start_b);
+                let overlap_end = end_a.min(end_b);
+                if overlap_start < overlap_end {
+                    issues.push(VhdxIntegrityAnomaly::RegionsOverlap {
+                        region_a: name_a,
+                        region_b: name_b,
+                        overlap_offset: overlap_start,
+                    });
+                }
+            }
+        }
+
+        // 3B: Log vs structural zone overlap.
+        if let Some(active) = self.active_header_block() {
+            let log_length = u32::from_le_bytes(active[68..72].try_into().unwrap());
+            let log_offset = u64::from_le_bytes(active[72..80].try_into().unwrap());
+            if log_length > 0 {
+                let log_end = log_offset.saturating_add(u64::from(log_length));
+                let structural: &[(&'static str, u64, u64)] = &[
+                    ("FileIdentifier", 0x0000_0000, 0x0010_0000),
+                    ("Header",         0x0010_0000, 0x0020_0000),
+                    ("RegionTable",    0x0020_0000, Self::LOG_RESERVED_ZONE_END),
+                ];
+                for &(name, s_start, s_end) in structural {
+                    if log_offset.max(s_start) < log_end.min(s_end) {
+                        issues.push(VhdxIntegrityAnomaly::LogOverlapsStructuralRegion {
+                            log_offset,
+                            overlapping: name,
+                        });
+                    }
+                }
+            }
         }
 
         issues
