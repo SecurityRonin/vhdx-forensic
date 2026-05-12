@@ -1659,3 +1659,34 @@ fn analyse_does_not_panic_on_extreme_metadata_item_offset() {
     image[META_BASE + 48..META_BASE + 52].copy_from_slice(&u32::MAX.to_le_bytes());
     let _ = VhdxIntegrity::new(&image).analyse();
 }
+
+// ── RegionEntryCountZero (Phase 3) ────────────────────────────────────────────
+
+// The region table entry_count field is at bytes 8–11 (u32 LE) within the RT.
+// A count of zero means no BAT or Metadata region is declared — structurally
+// impossible in a legitimately written VHDX after the first write cycle.
+
+#[test]
+fn region_entry_count_zero_in_rt1_detected() {
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
+    // Zero out RT1 entry count (bytes 8–11), re-CRC so RT1 is otherwise valid.
+    image[RT1 + 8..RT1 + 12].copy_from_slice(&0u32.to_le_bytes());
+    recompute_rt_crc(&mut image, RT1);
+    let issues = VhdxIntegrity::new(&image).check_region_layout();
+    assert!(
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::RegionEntryCountZero { copy: 1 })),
+        "RT1 entry_count=0 must produce RegionEntryCountZero(copy:1), got: {issues:#?}"
+    );
+}
+
+#[test]
+fn region_entry_count_zero_severity_is_warning() {
+    let anomaly = VhdxIntegrityAnomaly::RegionEntryCountZero { copy: 1 };
+    assert_eq!(
+        anomaly.severity(),
+        Severity::Warning,
+        "RegionEntryCountZero must be Warning severity"
+    );
+}
