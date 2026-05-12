@@ -15,6 +15,11 @@ pub const GUID_FILE_PARAMETERS: [u8; 16] = [
 pub const GUID_VIRTUAL_DISK_SIZE: [u8; 16] = [
     0x24, 0x42, 0xA5, 0x2F, 0x1B, 0xCD, 0x76, 0x48, 0xB2, 0x11, 0x5B, 0xE0, 0x7A, 0x6C, 0xE3, 0x2C,
 ];
+// QEMU ≤ v5.2 wrote a non-spec VirtualDiskSize GUID; files created by that version
+// are otherwise valid and common in the wild.
+pub const GUID_VIRTUAL_DISK_SIZE_QEMU_COMPAT: [u8; 16] = [
+    0x24, 0x42, 0xA5, 0x2F, 0x1B, 0xCD, 0x76, 0x48, 0xB2, 0x11, 0x5D, 0xBE, 0xD8, 0x3B, 0xF4, 0xB8,
+];
 pub const GUID_LOGICAL_SECTOR_SIZE: [u8; 16] = [
     0x1D, 0xBF, 0x41, 0x81, 0x6F, 0xA9, 0x09, 0x47, 0xBA, 0x47, 0xF2, 0x33, 0xA8, 0xFA, 0xAB, 0x5F,
 ];
@@ -116,8 +121,8 @@ pub fn parse_metadata(data: &[u8], region_offset: u64, region_len: u32) -> Resul
         let item_len =
             u32::from_le_bytes(region[base + 20..base + 24].try_into().unwrap()) as usize;
 
-        // Item data is at region_start + 0x10000 (metadata table is 64KB) + item_offset.
-        let data_start = start + 0x10000 + item_offset;
+        // Item data offset is from the start of the metadata region (MS-VHDX §3.3.2).
+        let data_start = start + item_offset;
         let data_end = data_start + item_len;
         if data.len() < data_end {
             continue;
@@ -128,7 +133,9 @@ pub fn parse_metadata(data: &[u8], region_offset: u64, region_len: u32) -> Resul
             block_size = Some(u32::from_le_bytes(item_data[0..4].try_into().unwrap()));
             let flags = u32::from_le_bytes(item_data[4..8].try_into().unwrap());
             has_parent = flags & 2 != 0;
-        } else if guid == GUID_VIRTUAL_DISK_SIZE && item_data.len() >= 8 {
+        } else if (guid == GUID_VIRTUAL_DISK_SIZE || guid == GUID_VIRTUAL_DISK_SIZE_QEMU_COMPAT)
+            && item_data.len() >= 8
+        {
             virtual_disk_size = Some(u64::from_le_bytes(item_data[0..8].try_into().unwrap()));
         } else if guid == GUID_LOGICAL_SECTOR_SIZE && item_data.len() >= 4 {
             logical_sector_size = Some(u32::from_le_bytes(item_data[0..4].try_into().unwrap()));

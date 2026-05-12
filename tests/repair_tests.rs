@@ -16,10 +16,10 @@ fn recompute_header_crc(buf: &mut [u8], header_off: usize) {
     buf[header_off + 4..header_off + 8].copy_from_slice(&c.to_le_bytes());
 }
 
-const H1: usize = 0x0010_0000;
-const H2: usize = 0x0014_0000;
-const RT1: usize = 0x0020_0000;
-const RT2: usize = 0x0024_0000;
+const H1: usize = 0x0001_0000;
+const H2: usize = 0x0002_0000;
+const RT1: usize = 0x0003_0000;
+const RT2: usize = 0x0004_0000;
 
 // ── Test 1: single bad header CRC is repaired ────────────────────────────────
 
@@ -211,8 +211,8 @@ fn setup_dirty_log(image: &mut [u8]) {
 
 #[test]
 fn repair_bat_entry_in_structural_region() {
-    // offset_mb=1 → file_offset=0x100000 (Header zone), state=6 (FULLY_PRESENT).
-    let bad_entry: u64 = (1u64 << 20) | 6;
+    // FileOffsetMB=0 → file_offset=0 (FileIdentifier zone), state=6 (FULLY_PRESENT).
+    let bad_entry: u64 = 6;
     let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
         .with_bat_patch(0, bad_entry)
         .build();
@@ -385,8 +385,8 @@ fn cannot_repair_ghost_data_in_absent_block() {
 #[test]
 fn cannot_repair_metadata_items_overlap() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
-    // Entry 1 item_offset is at META_BASE+80; change from 8 → 4 to overlap Entry 0's [0,8).
-    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&4u32.to_le_bytes());
+    // Entry 1 item_offset is at META_BASE+80; change from 0x10008 → 0x10004 to overlap Entry 0's [0x10000,0x10008).
+    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&0x1000_4u32.to_le_bytes());
     let mut repair = VhdxRepair::new(image);
     let report = repair.attempt_repair();
     assert!(

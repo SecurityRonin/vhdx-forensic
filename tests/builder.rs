@@ -120,14 +120,15 @@ impl VhdxBuilder {
 
     /// Build the VHDX byte image.
     pub fn build(self) -> Vec<u8> {
-        // Fixed layout for test images:
-        //   0x000000 - 0x0FFFFF : File Identifier (1 MB)
-        //   0x100000 - 0x13FFFF : Header 1 (64 KB, rest zeroed to 1MB)
-        //   0x140000 - 0x1FFFFF : Header 2 (at 0x140000)
-        //   0x200000 - 0x23FFFF : Region Table 1
-        //   0x240000 - 0x2FFFFF : Region Table 2
-        //   0x300000 - 0x30FFFF : Metadata region (64 KB table + 64 KB items)
-        //   0x310000 - ...      : BAT region
+        // Fixed layout for test images (MS-VHDX spec §2.1):
+        //   0x000000 - 0x00FFFF : File Identifier (64 KB slot)
+        //   0x010000 - 0x01FFFF : Header 1 (4 KB content + 60 KB padding)
+        //   0x020000 - 0x02FFFF : Header 2 (4 KB content + 60 KB padding)
+        //   0x030000 - 0x03FFFF : Region Table 1 (64 KB)
+        //   0x040000 - 0x04FFFF : Region Table 2 (64 KB)
+        //   0x050000 - 0x0FFFFF : Reserved padding to 1 MB boundary
+        //   0x300000 - 0x31FFFF : Metadata region (64 KB table + 64 KB items)
+        //   0x400000 - ...      : BAT region (1 MB-aligned after metadata)
         //   <bat-addressed>      : Data blocks
 
         let metadata_offset: u64 = 0x0030_0000; // 3 MB (1MB-aligned)
@@ -168,24 +169,24 @@ impl VhdxBuilder {
         let copy_len = creator_utf16.len().min(504);
         buf[8..8 + copy_len].copy_from_slice(&creator_utf16[..copy_len]);
 
-        // Header 1 at 0x100000.
-        Self::write_header(&mut buf, 0x0010_0000, 1);
-        // Header 2 at 0x140000 (sequence 0 — header 1 wins).
-        Self::write_header(&mut buf, 0x0014_0000, 0);
+        // Header 1 at 0x10000.
+        Self::write_header(&mut buf, 0x0001_0000, 1);
+        // Header 2 at 0x20000 (sequence 0 — header 1 wins).
+        Self::write_header(&mut buf, 0x0002_0000, 0);
 
-        // Region Table 1 at 0x200000.
+        // Region Table 1 at 0x30000.
         Self::write_region_table(
             &mut buf,
-            0x0020_0000,
+            0x0003_0000,
             bat_offset,
             bat_len,
             metadata_offset,
             metadata_len,
         );
-        // Region Table 2 at 0x240000 (identical copy).
+        // Region Table 2 at 0x40000 (identical copy).
         Self::write_region_table(
             &mut buf,
-            0x0024_0000,
+            0x0004_0000,
             bat_offset,
             bat_len,
             metadata_offset,
@@ -238,10 +239,7 @@ impl VhdxBuilder {
         }
 
         // Apply adversarial overrides.
-        // Metadata items are at metadata_offset + 0x10000 (the item area, NOT CRC-protected).
-        //   FileParameters (BlockSize u32, Flags u32): item_offset=0  → buf[base+0..+4] / [+4..+8]
-        //   VirtualDiskSize u64:                       item_offset=8  → buf[base+8..+16]
-        //   LogicalSectorSize u32:                     item_offset=16 → buf[base+16..+20]
+        // Items live at metadata_offset + 0x10000 (items area, NOT CRC-protected).
         let meta_items_base = metadata_offset as usize + 0x10000;
         if let Some(bs) = self.meta_block_size_override {
             buf[meta_items_base..meta_items_base + 4].copy_from_slice(&bs.to_le_bytes());
@@ -255,7 +253,7 @@ impl VhdxBuilder {
         // Region table: BAT entry's file_offset field is at byte 32 within the region table.
         // Region tables ARE CRC32C-protected, so re-CRC both copies after patching.
         if let Some(new_bat_off) = self.region_bat_offset_override {
-            for rt_off in [0x0020_0000usize, 0x0024_0000usize] {
+            for rt_off in [0x0003_0000usize, 0x0004_0000usize] {
                 buf[rt_off + 32..rt_off + 40].copy_from_slice(&new_bat_off.to_le_bytes());
                 let slice = &mut buf[rt_off..rt_off + 65536];
                 write_crc32c(slice, 4);
@@ -358,10 +356,11 @@ impl VhdxBuilder {
         // Reserved: u16 at [8..10].
         table[10..12].copy_from_slice(&3u16.to_le_bytes()); // EntryCount = 3
 
-        // Item offsets within the item area (relative to 0x10000 within region).
-        let off_file_params: u32 = 0;
-        let off_vdisk_size: u32 = 8;
-        let off_sector_size: u32 = 16;
+        // Item offsets per MS-VHDX §3.3.2: from the start of the metadata region.
+        // Items are placed starting at region_start + 0x10000 (after the 64 KB table area).
+        let off_file_params: u32 = 0x10000;
+        let off_vdisk_size: u32 = 0x10008;
+        let off_sector_size: u32 = 0x10010;
 
         // Entry 0: FileParameters (GUID: CAA16737-FA36-4D43-B3B6-33F0AA44E76B)
         let guid_fp: [u8; 16] = [

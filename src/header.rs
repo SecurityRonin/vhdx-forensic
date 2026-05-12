@@ -1,10 +1,11 @@
 use crate::error::{Result, VhdxError};
 
-/// Offsets per MS-VHDX spec §2.
-pub const HEADER1_OFFSET: u64 = 0x0010_0000; // 1 MB
-pub const HEADER2_OFFSET: u64 = 0x0014_0000; // 1 MB + 256 KB
-pub const REGION_TABLE1_OFFSET: u64 = 0x0020_0000; // 2 MB
-pub const REGION_TABLE2_OFFSET: u64 = 0x0024_0000; // 2 MB + 256 KB (backup)
+/// Offsets per MS-VHDX spec §2.1 — each block occupies a 64 KB slot within
+/// the first 1 MB of the file (the "header section").
+pub const HEADER1_OFFSET: u64 = 0x0001_0000; // 64 KB
+pub const HEADER2_OFFSET: u64 = 0x0002_0000; // 128 KB
+pub const REGION_TABLE1_OFFSET: u64 = 0x0003_0000; // 192 KB
+pub const REGION_TABLE2_OFFSET: u64 = 0x0004_0000; // 256 KB
 
 pub const HEADER_SIGNATURE: &[u8; 4] = b"head";
 pub const HEADER_SIZE: usize = 4096;

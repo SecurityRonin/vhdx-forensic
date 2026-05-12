@@ -28,10 +28,10 @@ fn recompute_rt_crc(buf: &mut [u8], rt_off: usize) {
     buf[rt_off + 4..rt_off + 8].copy_from_slice(&crc.to_le_bytes());
 }
 
-const H1: usize = 0x0010_0000; // header 1 offset
-const H2: usize = 0x0014_0000; // header 2 offset
-const RT1: usize = 0x0020_0000; // region table 1 offset
-const RT2: usize = 0x0024_0000; // region table 2 offset
+const H1: usize = 0x0001_0000; // header 1 offset (64 KB)
+const H2: usize = 0x0002_0000; // header 2 offset (128 KB)
+const RT1: usize = 0x0003_0000; // region table 1 offset (192 KB)
+const RT2: usize = 0x0004_0000; // region table 2 offset (256 KB)
 
 // ── Test 1: clean image has no anomalies ─────────────────────────────────────
 
@@ -549,20 +549,21 @@ fn log_beyond_container_detected() {
     );
 }
 
-// Test 30: LogOffset in reserved zone (below 0x300000)
+// Test 30: LogOffset in header section (below 1 MB)
 
 #[test]
 fn log_in_reserved_zone_detected() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
-    // LogOffset=1MB (header zone, well below 0x300000); LogLength=1MB.
-    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes());
-    image[H1 + 72..H1 + 80].copy_from_slice(&0x0010_0000u64.to_le_bytes());
+    // LogOffset=0 (below 1 MB threshold); LogLength=1 MB.
+    // The only 1-MB-aligned offset below 1 MB is 0, which falls in the header section.
+    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes()); // LogLength
+    image[H1 + 72..H1 + 80].copy_from_slice(&0u64.to_le_bytes()); // LogOffset=0
     recompute_header_crc(&mut image, H1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
         issues.iter().any(|a| matches!(
             a,
-            VhdxIntegrityAnomaly::LogInReservedZone { log_offset: 0x0010_0000 }
+            VhdxIntegrityAnomaly::LogInReservedZone { log_offset: 0 }
         )),
         "expected LogInReservedZone, got: {issues:#?}"
     );
@@ -604,7 +605,7 @@ fn phase2_severity_levels_correct() {
             VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog {
                 log_length: 0x0010_0000,
             },
-            Error,
+            Warning,
         ),
         (VhdxIntegrityAnomaly::LogVersionInvalid { version: 0 }, Warning),
         (VhdxIntegrityAnomaly::VersionInvalid { version: 2 }, Warning),
@@ -675,8 +676,10 @@ fn bat_size_metadata_mismatch_detected() {
 
 #[test]
 fn bat_entry_in_structural_region_detected() {
-    // file_offset = 0x100000 (Header region, 1 MB into the container).
-    let bat_entry: u64 = (1u64 << 20) | 6; // offset_mb=1, FULLY_PRESENT
+    // FileOffsetMB=0 → file_offset=0 (File Identifier zone), state=FULLY_PRESENT.
+    // BAT entries encode offsets in 1-MB units; offset_mb=0 puts the block at byte 0,
+    // covering [0, block_size) which spans all structural zones.
+    let bat_entry: u64 = 6; // (0u64 << 20) | 6
     let image = builder::VhdxBuilder::new(4 * 1024 * 1024)
         .with_bat_patch(0, bat_entry)
         .build();
@@ -686,11 +689,11 @@ fn bat_entry_in_structural_region_detected() {
             a,
             VhdxIntegrityAnomaly::BatEntryInStructuralRegion {
                 bat_index: 0,
-                collides_with: "Header",
+                collides_with: "FileIdentifier",
                 ..
             }
         )),
-        "expected BatEntryInStructuralRegion(Header), got: {issues:#?}"
+        "expected BatEntryInStructuralRegion(FileIdentifier), got: {issues:#?}"
     );
 }
 
@@ -1074,9 +1077,11 @@ fn regions_overlap_detected() {
 #[test]
 fn log_overlaps_structural_region_detected() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
-    // LogOffset=0x100000 (Header zone), LogLength=1MB — 1MB aligned, in reserved zone.
-    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes());
-    image[H1 + 72..H1 + 80].copy_from_slice(&0x0010_0000u64.to_le_bytes());
+    // LogOffset=0 (File Identifier zone), LogLength=1 MB.
+    // Structural zones are 0x10000-0x50000; log at offset 0 covers [0, 1MB),
+    // overlapping every structural block.
+    image[H1 + 68..H1 + 72].copy_from_slice(&0x0010_0000u32.to_le_bytes()); // LogLength
+    image[H1 + 72..H1 + 80].copy_from_slice(&0u64.to_le_bytes()); // LogOffset=0
     recompute_header_crc(&mut image, H1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
@@ -1256,7 +1261,7 @@ fn physical_sector_size_invalid_detected() {
         0x9C, 0xC9, 0xE9, 0x88, 0x52, 0x51, 0xC5, 0x56,
     ];
     image[e3..e3 + 16].copy_from_slice(&guid_pss);
-    image[e3 + 16..e3 + 20].copy_from_slice(&20u32.to_le_bytes()); // item_offset=20
+    image[e3 + 16..e3 + 20].copy_from_slice(&0x1001_4u32.to_le_bytes()); // item_offset from region start
     image[e3 + 20..e3 + 24].copy_from_slice(&4u32.to_le_bytes());  // item_len=4
     // flags and reserved stay zero
 
@@ -1287,7 +1292,7 @@ fn virtual_disk_id_all_zeros_detected() {
         0x93, 0xEF, 0xC3, 0x09, 0xE0, 0x00, 0xC7, 0x46,
     ];
     image[e3..e3 + 16].copy_from_slice(&guid_vdi);
-    image[e3 + 16..e3 + 20].copy_from_slice(&20u32.to_le_bytes()); // item_offset=20
+    image[e3 + 16..e3 + 20].copy_from_slice(&0x1001_4u32.to_le_bytes()); // item_offset from region start
     image[e3 + 20..e3 + 24].copy_from_slice(&16u32.to_le_bytes()); // item_len=16
     // 16 bytes at items_base+20 are already zero — VirtualDiskId = [0u8;16]
 
@@ -1306,10 +1311,10 @@ fn virtual_disk_id_all_zeros_detected() {
 fn metadata_items_overlap_detected() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
 
-    // Patch Entry 1 (VirtualDiskSize) item_offset from 8 to 4.
-    // Entry 0 item: [0..8]; Entry 1 item (new): [4..12] → overlap at [4..8].
+    // Patch Entry 1 (VirtualDiskSize) item_offset from 0x10008 to 0x10004.
+    // Entry 0 item: [0x10000..0x10008]; Entry 1 item: [0x10004..0x1000C] → overlap at [0x10004..0x10008].
     // Entry 1 Offset field is at table[80..84] = META_BASE + 80.
-    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&4u32.to_le_bytes());
+    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&0x1000_4u32.to_le_bytes());
 
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
@@ -1464,15 +1469,15 @@ fn file_identifier_reserved_nonzero_detected() {
 }
 
 // Test 63: non-zero bytes in the gap between structural regions
-// Gap between H1 (4096 bytes at 0x100000) and H2 (at 0x140000): 0x101000..0x140000.
+// Gap between H1 (4096 bytes at 0x10000) and H2 (at 0x20000): 0x11000..0x20000.
 
 #[test]
 fn inter_region_gap_nonzero_detected() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
     // Write a non-zero byte in the gap between Header1 and Header2.
-    // H1 occupies bytes [0x100000..0x101000] (4096-byte header).
-    // The gap is [0x101000..0x140000].
-    image[0x101000] = 0xAB;
+    // H1 occupies bytes [0x10000..0x11000] (4096-byte header in a 64 KB slot).
+    // The gap is [0x11000..0x20000].
+    image[0x11000] = 0xAB;
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
         issues
@@ -1488,7 +1493,7 @@ fn inter_region_gap_nonzero_detected() {
 #[test]
 fn header_reserved_nonzero_detected() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
-    // Write non-zero data in H1's reserved area (H1 = 0x100000..0x101000).
+    // Write non-zero data in H1's reserved area (H1 = 0x10000..0x11000).
     image[H1 + 80..H1 + 84].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
     // Recompute H1 CRC so the header remains structurally valid.
     recompute_header_crc(&mut image, H1);

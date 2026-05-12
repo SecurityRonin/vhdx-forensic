@@ -10,7 +10,7 @@ use crate::metadata::{
 use crate::region::{BAT_GUID, MB, METADATA_GUID, REGION_ENTRY_SIZE, REGION_TABLE_CRC_COVERAGE, REGION_TABLE_SIGNATURE};
 use crate::FILE_MAGIC;
 
-const MIN_CONTAINER_SIZE: u64 = 0x0025_0000; // 2.5 MB
+const MIN_CONTAINER_SIZE: u64 = 0x0005_0000; // 320 KB (5 × 64 KB structural slots)
 
 // BAT payload block states (MS-VHDX §2.3.5.1).
 const PAYLOAD_BLOCK_NOT_PRESENT: u8 = 0;
@@ -157,7 +157,7 @@ pub enum VhdxIntegrityAnomaly {
     // ── Container / magic ─────────────────────────────────────────────────────
     /// The 8-byte "vhdxfile" magic at offset 0 does not match.
     BadMagic { found: [u8; 8] },
-    /// File is smaller than the minimum structural size (2.5 MB).
+    /// File is smaller than the minimum structural size (320 KB).
     ContainerTruncated { size: u64, minimum: u64 },
 
     // ── Header CRC32C integrity ───────────────────────────────────────────────
@@ -244,7 +244,7 @@ pub enum VhdxIntegrityAnomaly {
         log_length: u32,
         container_size: u64,
     },
-    /// LogOffset places the log inside the reserved zone (below 0x300000). A
+    /// LogOffset places the log inside the header section (below 1 MB). A
     /// log here would overwrite structural data if replayed — log poisoning.
     LogInReservedZone { log_offset: u64 },
     /// Both header copies have valid CRCs but their sequence numbers differ by
@@ -525,11 +525,12 @@ impl VhdxIntegrityAnomaly {
             | Self::LogVersionInvalid { .. }
             | Self::VersionInvalid { .. }
             | Self::SequenceNumberGapLarge { .. } => Severity::Warning,
-            Self::LogGuidAllZerosWithDirtyLog { .. }
-            | Self::LogOffsetMisaligned { .. }
+            Self::LogOffsetMisaligned { .. }
             | Self::LogLengthMisaligned { .. }
             | Self::LogBeyondContainer { .. }
             | Self::LogInReservedZone { .. } => Severity::Error,
+            // log_guid=0 means no valid entries per spec; log_length>0 is a QEMU quirk, not corruption.
+            Self::LogGuidAllZerosWithDirtyLog { .. } => Severity::Warning,
             Self::DirtyLog { .. } => Severity::Info,
             Self::PhysicalSectorSizeInvalid { .. } | Self::VirtualDiskIdAllZeros => {
                 Severity::Warning
@@ -554,7 +555,7 @@ impl VhdxIntegrityAnomaly {
                  image, was truncated before the identifier section, or the magic was overwritten \
                  to disguise the container's true format.",
             Self::ContainerTruncated { .. } =>
-                "The file is smaller than the minimum VHDX structural size (2.5 MB). The \
+                "The file is smaller than the minimum VHDX structural size (320 KB). The \
                  container was either incompletely written, deliberately truncated to destroy \
                  evidence, or is a stub masquerading as a full image.",
             Self::HeaderChecksumMismatch { .. } =>
@@ -634,8 +635,8 @@ impl VhdxIntegrityAnomaly {
                  does not exist in this container; the log pointer was set to reference \
                  data that is not present, possibly to trigger parser overflow vulnerabilities.",
             Self::LogInReservedZone { .. } =>
-                "The LogOffset places the log inside the reserved structural zone (below \
-                 0x300000). Log replay would overwrite VHDX structural data — a log-poisoning \
+                "The LogOffset places the log inside the header section (below 1 MB). \
+                 Log replay would overwrite VHDX structural data — a log-poisoning \
                  attack that can corrupt headers or region tables on mount.",
             Self::SequenceNumberGapLarge { .. } =>
                 "The two valid header copies have sequence numbers differing by more than 1. \
@@ -937,8 +938,8 @@ impl<'a> VhdxIntegrity<'a> {
         issues
     }
 
-    // Reserved zone below the metadata region (FileIdentifier + headers + region tables).
-    const LOG_RESERVED_ZONE_END: u64 = 0x0030_0000;
+    // End of the header section (all structural blocks must be below this).
+    const LOG_RESERVED_ZONE_END: u64 = 0x0005_0000; // 320 KB
 
     // ── Public check functions ────────────────────────────────────────────────
 
@@ -1047,7 +1048,7 @@ impl<'a> VhdxIntegrity<'a> {
                         container_size: self.data.len() as u64,
                     });
                 }
-                if log_offset < 0x0030_0000 {
+                if log_offset < 0x0010_0000 {
                     issues.push(VhdxIntegrityAnomaly::LogInReservedZone { log_offset });
                 }
                 issues.push(VhdxIntegrityAnomaly::DirtyLog { log_length, log_offset });
@@ -1107,20 +1108,24 @@ impl<'a> VhdxIntegrity<'a> {
     /// Check for non-zero bytes in the padding gaps between fixed structural regions.
     pub fn check_inter_region_gaps(&self) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
-        if self.data.len() < 0x0030_0000 {
+        if self.data.len() < 0x0010_0000 {
             return issues;
         }
 
         // Fixed structural gaps (VHDX spec §2.1):
-        //   H1 is 4096 bytes at 0x100000; H2 starts at 0x140000.
-        //   H2 is 4096 bytes at 0x140000; RT section starts at 0x200000.
-        //   RT1 is 65536 bytes at 0x200000; RT2 starts at 0x240000.
-        //   RT2 is 65536 bytes at 0x240000; first user region at ≥ 0x300000.
+        //   Each block occupies a 64 KB slot within the first 1 MB.
+        //   Headers are 4 KB; the remaining 60 KB of each header slot must be zero.
+        //   Region tables consume the full 64 KB slot (CRC covers the whole block).
+        //   RT1 and RT2 are adjacent — no gap between them.
+        //   Bytes [0x50000..0x100000] (reserved padding to 1 MB boundary) must be zero.
+        let h1 = HEADER1_OFFSET as usize;
+        let h2 = HEADER2_OFFSET as usize;
+        let rt1 = REGION_TABLE1_OFFSET as usize;
+        let rt2 = REGION_TABLE2_OFFSET as usize;
         let fixed_gaps: &[(&'static str, &'static str, usize, usize)] = &[
-            ("Header1",       "Header2",       0x0010_1000, 0x0014_0000),
-            ("Header2",       "RegionTable",   0x0014_1000, 0x0020_0000),
-            ("RegionTable1",  "RegionTable2",  0x0021_0000, 0x0024_0000),
-            ("RegionTable2",  "Metadata",      0x0025_0000, 0x0030_0000),
+            ("Header1",      "Header2",      h1 + HEADER_SIZE, h2),
+            ("Header2",      "RegionTable1", h2 + HEADER_SIZE, rt1),
+            ("RegionTable2", "DataArea",     rt2 + REGION_TABLE_CRC_COVERAGE, 0x0010_0000),
         ];
         for &(from, to, gap_start, gap_end) in fixed_gaps {
             if self.data.len() < gap_end {
@@ -1151,6 +1156,10 @@ impl<'a> VhdxIntegrity<'a> {
         let log_offset = u64::from_le_bytes(active[72..80].try_into().unwrap());
         let header_log_guid: [u8; 16] = active[48..64].try_into().unwrap();
         if log_length == 0 {
+            return issues;
+        }
+        // Per MS-VHDX spec §2.1: log_guid=0 means no valid log entries — skip entry scan.
+        if header_log_guid == [0u8; 16] {
             return issues;
         }
         let log_start = log_offset as usize;
@@ -1337,9 +1346,11 @@ impl<'a> VhdxIntegrity<'a> {
             if log_length > 0 {
                 let log_end = log_offset.saturating_add(u64::from(log_length));
                 let structural: &[(&'static str, u64, u64)] = &[
-                    ("FileIdentifier", 0x0000_0000, 0x0010_0000),
-                    ("Header",         0x0010_0000, 0x0020_0000),
-                    ("RegionTable",    0x0020_0000, Self::LOG_RESERVED_ZONE_END),
+                    ("FileIdentifier", 0x0000_0000, 0x0001_0000),
+                    ("Header1",        0x0001_0000, 0x0002_0000),
+                    ("Header2",        0x0002_0000, 0x0003_0000),
+                    ("RegionTable1",   0x0003_0000, 0x0004_0000),
+                    ("RegionTable2",   0x0004_0000, Self::LOG_RESERVED_ZONE_END),
                 ];
                 for &(name, s_start, s_end) in structural {
                     if log_offset.max(s_start) < log_end.min(s_end) {
@@ -1508,8 +1519,8 @@ impl<'a> VhdxIntegrity<'a> {
                     let item_off = u32::from_le_bytes(
                         region[base + 16..base + 20].try_into().unwrap(),
                     ) as usize;
-                    let data_start =
-                        meta_start.checked_add(0x10000)?.checked_add(item_off)?;
+                    // Offset is from the start of the metadata region (MS-VHDX §3.3.2).
+                    let data_start = meta_start.checked_add(item_off)?;
                     if guid == GUID_FILE_PARAMETERS && self.data.len() >= data_start + 8 {
                         block_size = Some(u32::from_le_bytes(
                             self.data[data_start..data_start + 4].try_into().unwrap(),
@@ -1615,7 +1626,8 @@ impl<'a> VhdxIntegrity<'a> {
         let meta_end = meta_start.saturating_add(r.meta_length as usize);
         if self.data.len() >= meta_end && r.meta_length >= 8 {
             let region = &self.data[meta_start..meta_end];
-            let region_item_area_size = r.meta_length.saturating_sub(0x10000) as usize;
+            // Item offsets in table entries are from the start of the metadata region (§3.3.2).
+            let region_size = r.meta_length as usize;
             if &region[..8] == METADATA_TABLE_SIGNATURE {
                 let count =
                     u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
@@ -1634,12 +1646,12 @@ impl<'a> VhdxIntegrity<'a> {
                     );
                     let item_end = item_off.saturating_add(item_len);
 
-                    // Check: item data extends past end of metadata region's item area.
-                    if item_end as usize > region_item_area_size {
+                    // Check: item data extends past end of metadata region.
+                    if item_end as usize > region_size {
                         issues.push(VhdxIntegrityAnomaly::MetadataItemBeyondRegion {
                             item_offset: item_off,
                             item_end,
-                            region_end: region_item_area_size as u32,
+                            region_end: region_size as u32,
                         });
                     }
 
@@ -1777,9 +1789,11 @@ impl<'a> VhdxIntegrity<'a> {
 
         // Returns the structural zone name for a given file offset, or None.
         let structural_zone = |fo: u64| -> Option<&'static str> {
-            if fo < MB           { return Some("File Identifier"); }
-            if fo < 2 * MB       { return Some("Header"); }
-            if fo < 3 * MB       { return Some("Region Table"); }
+            if fo < 0x0001_0000 { return Some("FileIdentifier"); }
+            if fo < 0x0002_0000 { return Some("Header1"); }
+            if fo < 0x0003_0000 { return Some("Header2"); }
+            if fo < 0x0004_0000 { return Some("RegionTable1"); }
+            if fo < 0x0005_0000 { return Some("RegionTable2"); }
             if fo >= r.meta_offset && fo < meta_end { return Some("Metadata"); }
             if let Some((lo, le)) = log_zone { if fo >= lo && fo < le { return Some("Log"); } }
             None
