@@ -294,6 +294,11 @@ pub enum VhdxIntegrityAnomaly {
         location: &'static str,
         value: u32,
     },
+    /// The region table entry count (bytes 8–11) is zero. No BAT or Metadata
+    /// region is declared. A legitimately written VHDX always registers both
+    /// regions after the first write cycle; a zero count indicates the region
+    /// table header was patched after initialization.
+    RegionEntryCountZero { copy: u8 },
 
     // ── Region table CRC32C integrity ─────────────────────────────────────────
     /// One region table copy has a CRC32C mismatch.
@@ -516,9 +521,9 @@ impl VhdxIntegrityAnomaly {
             | Self::RegionBeyondContainer { .. }
             | Self::RegionsOverlap { .. }
             | Self::LogOverlapsStructuralRegion { .. } => Severity::Error,
-            Self::UnknownRequiredRegion { .. } | Self::RegionTableReservedNonZero { .. } => {
-                Severity::Warning
-            }
+            Self::UnknownRequiredRegion { .. }
+            | Self::RegionTableReservedNonZero { .. }
+            | Self::RegionEntryCountZero { .. } => Severity::Warning,
             Self::FileWriteGuidAllZeros
             | Self::DataWriteGuidAllZeros
             | Self::LogGuidWithNoLog { .. }
@@ -670,6 +675,12 @@ impl VhdxIntegrityAnomaly {
                 "Reserved bytes in the region table are non-zero. These bytes are \
                  CRC-protected but semantically undefined; non-zero content can carry \
                  steganographic payloads that survive most sanitization tools.",
+            Self::RegionEntryCountZero { .. } =>
+                "The region table declares zero region entries. No BAT or Metadata region \
+                 is registered, making the virtual disk undecodable by standard parsers. \
+                 A legitimate VHDX always declares both BAT and Metadata after the first \
+                 write cycle; a zero count indicates post-initialization patching — either \
+                 to block forensic analysis or as part of a deliberately invalid container.",
             Self::RegionTableChecksumMismatch { .. } =>
                 "A region table copy's CRC32C is invalid. The region table was modified \
                  after the last legitimate write — targeted tampering of the structure \
@@ -1262,6 +1273,10 @@ impl<'a> VhdxIntegrity<'a> {
 
         let entry_count =
             (u32::from_le_bytes(rt[8..12].try_into().unwrap()) as usize).min(2048);
+        if entry_count == 0 {
+            issues.push(VhdxIntegrityAnomaly::RegionEntryCountZero { copy });
+            return issues;
+        }
         let mut known: Vec<(&'static str, u64, u64)> = Vec::new(); // (name, start, end)
 
         for i in 0..entry_count {
