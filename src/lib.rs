@@ -10,7 +10,7 @@ pub mod integrity;
 pub mod repair;
 
 // Re-export the reader so callers don't need two crates for basic use.
-pub use vhdx::{Result, VhdxError, VhdxReader, FILE_MAGIC};
+pub use vhdx::{header::crc32c, Result, VhdxError, VhdxReader, FILE_MAGIC};
 pub use integrity::{AnalysisSummary, Severity, VhdxIntegrity, VhdxIntegrityAnomaly};
 
 /// Return references to all anomalies whose severity is at or above `min`.

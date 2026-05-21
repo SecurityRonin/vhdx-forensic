@@ -1,8 +1,8 @@
-use crate::header::{
+use vhdx::header::{
     crc32c, HEADER1_OFFSET, HEADER2_OFFSET, HEADER_SIZE, REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET,
 };
 use crate::integrity::{VhdxIntegrity, VhdxIntegrityAnomaly};
-use crate::region::REGION_TABLE_CRC_COVERAGE;
+use vhdx::region::REGION_TABLE_CRC_COVERAGE;
 
 /// A single repair action that was successfully applied to the image.
 #[derive(Debug, Clone)]
