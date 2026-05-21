@@ -1,33 +1,16 @@
-//! Pure-Rust read-only VHDX container reader.
+//! VHDX forensic integrity analyser and in-memory repair tool.
 //!
-//! Decodes the VHDX outer container (MS-VHDX spec) and exposes a
-//! `Read + Seek` interface over the virtual sector stream, which can be
-//! handed directly to filesystem navigation crates (e.g. ext4fs-forensic).
+//! Depends on the `vhdx` crate for container parsing. Exports `VhdxIntegrity`,
+//! `VhdxRepair`, and all anomaly/severity types.
 //!
 //! # Layer
-//! CONTAINER — equivalent role to `ewf` for E01 images.
-//!
-//! # Supported formats
-//! - VHDX Version 1 (Windows 8+ / Server 2012+ native format)
-//! - Dynamic disks (sparse, BAT-addressed data blocks)
-//! - Fixed disks
-//!
-//! # Limitations
-//! - Read-only
-//! - Differencing disks (HasParent=true) are not supported
-//! - Log replay is not performed (offline forensic snapshots are typically clean)
+//! FORENSIC AUDIT — equivalent role to `ewf-forensic` for E01 images.
 
-mod bat;
-mod error;
-mod header;
 pub mod integrity;
-mod metadata;
-mod reader;
-mod region;
 pub mod repair;
 
-pub use error::{Result, VhdxError};
-pub use header::crc32c;
+// Re-export the reader so callers don't need two crates for basic use.
+pub use vhdx::{Result, VhdxError, VhdxReader, FILE_MAGIC};
 pub use integrity::{AnalysisSummary, Severity, VhdxIntegrity, VhdxIntegrityAnomaly};
 
 /// Return references to all anomalies whose severity is at or above `min`.
@@ -37,8 +20,4 @@ pub fn anomalies_at_least<'a>(
 ) -> Vec<&'a VhdxIntegrityAnomaly> {
     anomalies.iter().filter(|a| a.severity() >= min).collect()
 }
-pub use reader::VhdxReader;
 pub use repair::{CannotRepair, RepairAction, RepairReport, VhdxRepair};
-
-// Well-known VHDX file magic.
-pub const FILE_MAGIC: &[u8; 8] = b"vhdxfile";
