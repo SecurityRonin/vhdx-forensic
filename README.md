@@ -140,6 +140,7 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the full validation report incl
 
 ## Related
 
+- [`vhdx`](https://github.com/SecurityRonin/vhdx) — Pure-Rust VHDX container reader; the parser layer this crate depends on
 - [`ewf`](https://crates.io/crates/ewf) — EWF/E01 container reader; pairs with this crate in the Issen stack
 - [`ewf-forensic`](https://crates.io/crates/ewf-forensic) — Integrity auditor and Adler-32 repair for EWF images; the EWF counterpart to this crate
 - [libvhdi](https://github.com/libyal/libvhdi) — C-based VHDX/VHD reader (LGPL); the independent reference implementation we validate against
