@@ -148,8 +148,4 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the full validation report incl
 ## License
 
 MIT — see [LICENSE](LICENSE).  
-Copyright © 2026 Security Ronin Ltd.
-
----
-
-[Privacy Policy](https://securityronin.com/privacy) · [Terms of Service](https://securityronin.com/terms)
+[Privacy Policy](https://securityronin.github.io/vhdx-forensic/privacy/) · [Terms of Service](https://securityronin.github.io/vhdx-forensic/terms/) · © 2026 Security Ronin Ltd
