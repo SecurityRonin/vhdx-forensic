@@ -133,11 +133,13 @@ created by a tool that uses a parent-locator format qemu does not support.
 | Check | Expected | Result |
 |---|---|---|
 | `VhdxReader::from_bytes()` returns an error | yes (`DifferencingNotSupported`) | PASS |
+| `VhdxReader::from_bytes_with_parent(child, parent)` opens without error | yes | PASS |
 | `VhdxIntegrity::analyse()` — no Error/Critical anomalies | zero | PASS |
 | `VhdxIntegrity::analyse()` emits `DifferencingDisk` (Warning) | yes | PASS |
 
-`VhdxReader` correctly refuses differencing disks because it cannot serve accurate logical
-data without the parent chain. `VhdxIntegrity` still analyses the raw bytes and correctly
+`VhdxReader::from_bytes` refuses differencing disks when no parent is supplied to prevent
+silent data loss. `VhdxReader::from_bytes_with_parent` opens the child and falls back to
+the parent reader for absent blocks. `VhdxIntegrity` analyses the raw bytes regardless and
 identifies the disk as a differencing disk via the `HasParent` metadata flag.
 
 ---
@@ -246,7 +248,7 @@ Offset          Size     Region
 |---|---|---|---|---|
 | ext2.vhdx (dfvfs, QEMU v5.2) | yes | 4 MiB — agrees with qemu-img | yes | PASS |
 | fat-parent.vhdx (dfvfs) | yes | 4 MiB — agrees with qemu-img | yes | PASS |
-| fat-differential.vhdx (dfvfs) | refused (correct) | n/a — differencing disk | yes | PASS |
+| fat-differential.vhdx (dfvfs) | from_bytes refused; from_bytes_with_parent opens | n/a — differencing disk | yes | PASS |
 | ext2.vhd (dfvfs, VHD format) | refused (correct) | n/a — not VHDX | yes | PASS |
 | qemu_empty_dynamic.vhdx (QEMU v11) | yes | 16 MiB — agrees with qemu-img | yes | PASS |
 | qemu_fixed.vhdx (QEMU v11, fixed) | yes | 8 MiB — agrees with qemu-img | yes | PASS |
@@ -258,7 +260,7 @@ Offset          Size     Region
 | Region table CRC mismatch | §2.3 offset 0x3_0000..0x3_0004 | `RegionTableChecksumMismatch` / `BothRegionTableCopiesInvalid` | PASS |
 | Container truncated | Slice to 256 KiB | `ContainerTruncated` | PASS |
 
-All 138 tests pass. Zero false positives on six real images from two independent sources.
+All 138 tests pass across 10 test suites. Zero false positives on six real images from two independent sources.
 Four detection capability probes all pass against real QEMU-generated images.
 
 ---

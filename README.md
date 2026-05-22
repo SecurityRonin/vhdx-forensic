@@ -115,19 +115,20 @@ VHDX headers and region tables are CRC32C-protected, but the **BAT** (Block Allo
 | Container size | Minimum 2.5 MB before any offset arithmetic |
 | BAT offset arithmetic | `checked_mul`/`checked_add` — `AddressOverflow` instead of panic |
 
-Differencing disks (`HasParent = true`) are not supported by `VhdxReader` and are rejected at open time. `VhdxIntegrity` still analyses their raw structure and emits `DifferencingDisk` (Warning).
+Differencing disks (`HasParent = true`) can be opened via `VhdxReader::from_bytes_with_parent(child, parent)`. `VhdxReader::from_bytes` still rejects them without a parent to prevent silent data loss. `VhdxIntegrity` analyses the raw structure regardless and emits `DifferencingDisk` (Warning).
 
 ## Supported formats
 
 - VHDX Version 1 (Windows 8 / Server 2012 and later)
 - Dynamic disks (sparse BAT-addressed data blocks)
 - Fixed disks (all blocks preallocated)
+- Differencing disks (via `VhdxReader::from_bytes_with_parent`)
 
-Log replay is not performed. Offline forensic snapshots are expected to be consistent; replaying an uncommitted log is out of scope.
+Dirty-log recovery is applied automatically on open: if the active header carries a non-zero `LogGuid`, the log region is replayed into the in-memory buffer before any BAT or metadata parsing.
 
 ## Testing
 
-138 tests across 8 test suites. Real images from two independent sources are committed to the repository:
+138 tests across 10 test suites. Real images from two independent sources are committed to the repository:
 
 | Source | Images | Purpose |
 |---|---|---|
