@@ -25,7 +25,7 @@ fn anomalies_at_least_filters_correctly() {
     ];
 
     // At or above Error: Critical + Error (= 2).
-    let filtered = anomalies_at_least(&anomalies, Severity::Error);
+    let filtered = anomalies_at_least(&anomalies, Severity::High);
     assert_eq!(
         filtered.len(),
         2,
@@ -67,8 +67,8 @@ fn summary_counts_match_input() {
     let s: AnalysisSummary = VhdxIntegrity::summary(&anomalies);
     assert_eq!(s.total, 4);
     assert_eq!(s.critical, 1);
-    assert_eq!(s.error, 1);
-    assert_eq!(s.warning, 1);
+    assert_eq!(s.high, 1);
+    assert_eq!(s.medium, 1);
     assert_eq!(s.info, 1);
     assert_eq!(s.highest, Some(Severity::Critical));
 }
@@ -78,8 +78,8 @@ fn summary_empty_returns_zeros_and_none() {
     let s: AnalysisSummary = VhdxIntegrity::summary(&[]);
     assert_eq!(s.total, 0);
     assert_eq!(s.critical, 0);
-    assert_eq!(s.error, 0);
-    assert_eq!(s.warning, 0);
+    assert_eq!(s.high, 0);
+    assert_eq!(s.medium, 0);
     assert_eq!(s.info, 0);
     assert_eq!(s.highest, None);
 }

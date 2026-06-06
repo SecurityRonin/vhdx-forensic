@@ -40,7 +40,7 @@ fn dfvfs_ext2_vhdx_sector_0_readable() {
 #[test]
 fn dfvfs_ext2_vhdx_no_error_anomalies() {
     let issues = VhdxIntegrity::new(&data("ext2.vhdx")).analyse();
-    let errors = anomalies_at_least(&issues, Severity::Error);
+    let errors = anomalies_at_least(&issues, Severity::High);
     assert!(
         errors.is_empty(),
         "QEMU ext2.vhdx must have no Error/Critical anomalies, got: {errors:#?}"
@@ -80,7 +80,7 @@ fn dfvfs_fat_parent_vhdx_sector_0_readable() {
 #[test]
 fn dfvfs_fat_parent_vhdx_no_error_anomalies() {
     let issues = VhdxIntegrity::new(&data("fat-parent.vhdx")).analyse();
-    let errors = anomalies_at_least(&issues, Severity::Error);
+    let errors = anomalies_at_least(&issues, Severity::High);
     assert!(
         errors.is_empty(),
         "fat-parent.vhdx must have no Error/Critical anomalies, got: {errors:#?}"
@@ -107,7 +107,7 @@ fn dfvfs_fat_differential_vhdx_reader_refuses_without_parent() {
 #[test]
 fn dfvfs_fat_differential_vhdx_no_error_anomalies() {
     let issues = VhdxIntegrity::new(&data("fat-differential.vhdx")).analyse();
-    let errors = anomalies_at_least(&issues, Severity::Error);
+    let errors = anomalies_at_least(&issues, Severity::High);
     assert!(
         errors.is_empty(),
         "fat-differential.vhdx must have no Error/Critical anomalies, got: {errors:#?}"

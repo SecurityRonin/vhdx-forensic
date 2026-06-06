@@ -133,18 +133,9 @@ struct ParsedRegions {
     has_parent_locator: bool,
 }
 
-/// Diagnostic severity level.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Severity {
-    /// Noteworthy but consistent with legitimate use (e.g. uncommitted log on a live snapshot).
-    Info,
-    /// Suspicious — has a plausible legitimate explanation but warrants investigation.
-    Warning,
-    /// Definitive evidence of tampering or structural corruption.
-    Error,
-    /// Prevents reliable forensic analysis; file cannot be decoded.
-    Critical,
-}
+/// The canonical 5-level severity scale, shared across every SecurityRonin
+/// analyzer via [`forensicnomicon::report`].
+pub use forensicnomicon::report::Severity;
 
 /// A single forensic finding in a VHDX image.
 ///
@@ -486,13 +477,13 @@ impl VhdxIntegrityAnomaly {
                 Severity::Critical
             }
             Self::HeaderChecksumMismatch { .. } | Self::RegionTableChecksumMismatch { .. } => {
-                Severity::Error
+                Severity::High
             }
             Self::HeaderCopyMismatch { .. }
             | Self::RegionTableCopyMismatch { .. }
             | Self::BatEntriesOverlap { .. }
             | Self::BatEntryBeyondContainer { .. }
-            | Self::VirtualDiskSizeUnderreported { .. } => Severity::Error,
+            | Self::VirtualDiskSizeUnderreported { .. } => Severity::High,
             Self::DifferencingDisk
             | Self::MetadataMissing(_)
             | Self::BlockSizeInvalid { .. }
@@ -500,53 +491,53 @@ impl VhdxIntegrityAnomaly {
             | Self::VirtualDiskSizeInvalid { .. }
             | Self::BatEntryUnaligned { .. }
             | Self::PartiallyPresentBlock { .. }
-            | Self::SectorBitmapInvalidState { .. } => Severity::Warning,
+            | Self::SectorBitmapInvalidState { .. } => Severity::Medium,
             Self::BothSequenceNumbersZero
             | Self::SequenceNumbersIdentical { .. }
             | Self::TrailingData { .. }
-            | Self::CreatorStringAnomalous { .. } => Severity::Warning,
+            | Self::CreatorStringAnomalous { .. } => Severity::Medium,
             Self::BatEntryInStructuralRegion { .. }
-            | Self::BatSizeMetadataMismatch { .. } => Severity::Error,
+            | Self::BatSizeMetadataMismatch { .. } => Severity::High,
             Self::MissingSectorBitmap { .. }
             | Self::UndefinedBlockState { .. }
             | Self::UnmappedBlockInNonDifferencing { .. }
-            | Self::GhostDataInAbsentBlock { .. } => Severity::Warning,
+            | Self::GhostDataInAbsentBlock { .. } => Severity::Medium,
             Self::LogEntryCrcMismatch { .. }
             | Self::LogEntryGuidMismatch { .. }
-            | Self::LogSequenceNumberGap { .. } => Severity::Error,
+            | Self::LogSequenceNumberGap { .. } => Severity::High,
             Self::LogZeroedButDirty { .. } | Self::LogEntrySignatureMissing { .. } => {
-                Severity::Warning
+                Severity::Medium
             }
             Self::RegionMisaligned { .. }
             | Self::RegionBeyondContainer { .. }
             | Self::RegionsOverlap { .. }
-            | Self::LogOverlapsStructuralRegion { .. } => Severity::Error,
+            | Self::LogOverlapsStructuralRegion { .. } => Severity::High,
             Self::UnknownRequiredRegion { .. }
             | Self::RegionTableReservedNonZero { .. }
-            | Self::RegionEntryCountZero { .. } => Severity::Warning,
+            | Self::RegionEntryCountZero { .. } => Severity::Medium,
             Self::FileWriteGuidAllZeros
             | Self::DataWriteGuidAllZeros
             | Self::LogGuidWithNoLog { .. }
             | Self::LogVersionInvalid { .. }
             | Self::VersionInvalid { .. }
-            | Self::SequenceNumberGapLarge { .. } => Severity::Warning,
+            | Self::SequenceNumberGapLarge { .. } => Severity::Medium,
             Self::LogOffsetMisaligned { .. }
             | Self::LogLengthMisaligned { .. }
             | Self::LogBeyondContainer { .. }
-            | Self::LogInReservedZone { .. } => Severity::Error,
+            | Self::LogInReservedZone { .. } => Severity::High,
             // log_guid=0 means no valid entries per spec; log_length>0 is a QEMU quirk, not corruption.
-            Self::LogGuidAllZerosWithDirtyLog { .. } => Severity::Warning,
+            Self::LogGuidAllZerosWithDirtyLog { .. } => Severity::Medium,
             Self::DirtyLog { .. } => Severity::Info,
             Self::PhysicalSectorSizeInvalid { .. } | Self::VirtualDiskIdAllZeros => {
-                Severity::Warning
+                Severity::Medium
             }
             Self::MetadataItemsOverlap { .. }
             | Self::MetadataItemBeyondRegion { .. }
             | Self::MissingParentLocator
-            | Self::VirtualDiskSizeOverreported { .. } => Severity::Error,
-            Self::LeaveBlocksAllocatedSet => Severity::Warning,
+            | Self::VirtualDiskSizeOverreported { .. } => Severity::High,
+            Self::LeaveBlocksAllocatedSet => Severity::Medium,
             Self::FileIdentifierReservedNonZero { .. } | Self::HeaderReservedNonZero { .. } => {
-                Severity::Warning
+                Severity::Medium
             }
             Self::InterRegionGapNonZero { .. } => Severity::Info,
         }
@@ -846,8 +837,9 @@ impl VhdxIntegrityAnomaly {
 pub struct AnalysisSummary {
     pub total: usize,
     pub critical: usize,
-    pub error: usize,
-    pub warning: usize,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
     pub info: usize,
     /// The highest severity present, or `None` if the input was empty.
     pub highest: Option<Severity>,
@@ -871,8 +863,9 @@ impl<'a> VhdxIntegrity<'a> {
         let mut s = AnalysisSummary {
             total: 0,
             critical: 0,
-            error: 0,
-            warning: 0,
+            high: 0,
+            medium: 0,
+            low: 0,
             info: 0,
             highest: None,
         };
@@ -881,9 +874,11 @@ impl<'a> VhdxIntegrity<'a> {
             let sev = a.severity();
             match sev {
                 Severity::Critical => s.critical += 1,
-                Severity::Error => s.error += 1,
-                Severity::Warning => s.warning += 1,
+                Severity::High => s.high += 1,
+                Severity::Medium => s.medium += 1,
+                Severity::Low => s.low += 1,
                 Severity::Info => s.info += 1,
+                _ => {}
             }
             s.highest = Some(match s.highest.take() {
                 None => sev,
@@ -2179,5 +2174,93 @@ impl<'a> VhdxIntegrity<'a> {
             (false, true) => Some(&self.data[h2_off..h2_off + HEADER_SIZE]),
             (false, false) => None,
         }
+    }
+}
+
+
+impl VhdxIntegrityAnomaly {
+    /// Stable, scheme-prefixed machine code for this anomaly.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::BadMagic { .. } => "VHDX-BAD-MAGIC",
+            Self::ContainerTruncated { .. } => "VHDX-CONTAINER-TRUNCATED",
+            Self::HeaderChecksumMismatch { .. } => "VHDX-HEADER-CHECKSUM-MISMATCH",
+            Self::BothHeaderCopiesInvalid => "VHDX-BOTH-HEADER-COPIES-INVALID",
+            Self::SequenceNumbersIdentical { .. } => "VHDX-SEQUENCE-NUMBERS-IDENTICAL",
+            Self::BothSequenceNumbersZero => "VHDX-BOTH-SEQUENCE-NUMBERS-ZERO",
+            Self::HeaderCopyMismatch { .. } => "VHDX-HEADER-COPY-MISMATCH",
+            Self::LogZeroedButDirty { .. } => "VHDX-LOG-ZEROED-BUT-DIRTY",
+            Self::LogEntrySignatureMissing { .. } => "VHDX-LOG-ENTRY-SIGNATURE-MISSING",
+            Self::LogEntryCrcMismatch { .. } => "VHDX-LOG-ENTRY-CRC-MISMATCH",
+            Self::LogEntryGuidMismatch { .. } => "VHDX-LOG-ENTRY-GUID-MISMATCH",
+            Self::LogSequenceNumberGap { .. } => "VHDX-LOG-SEQUENCE-NUMBER-GAP",
+            Self::FileWriteGuidAllZeros => "VHDX-FILE-WRITE-GUID-ALL-ZEROS",
+            Self::DataWriteGuidAllZeros => "VHDX-DATA-WRITE-GUID-ALL-ZEROS",
+            Self::LogGuidWithNoLog { .. } => "VHDX-LOG-GUID-WITH-NO-LOG",
+            Self::LogGuidAllZerosWithDirtyLog { .. } => "VHDX-LOG-GUID-ALL-ZEROS-WITH-DIRTY-LOG",
+            Self::LogVersionInvalid { .. } => "VHDX-LOG-VERSION-INVALID",
+            Self::VersionInvalid { .. } => "VHDX-VERSION-INVALID",
+            Self::LogOffsetMisaligned { .. } => "VHDX-LOG-OFFSET-MISALIGNED",
+            Self::LogLengthMisaligned { .. } => "VHDX-LOG-LENGTH-MISALIGNED",
+            Self::LogBeyondContainer { .. } => "VHDX-LOG-BEYOND-CONTAINER",
+            Self::LogInReservedZone { .. } => "VHDX-LOG-IN-RESERVED-ZONE",
+            Self::SequenceNumberGapLarge { .. } => "VHDX-SEQUENCE-NUMBER-GAP-LARGE",
+            Self::DirtyLog { .. } => "VHDX-DIRTY-LOG",
+            Self::RegionMisaligned { .. } => "VHDX-REGION-MISALIGNED",
+            Self::RegionBeyondContainer { .. } => "VHDX-REGION-BEYOND-CONTAINER",
+            Self::RegionsOverlap { .. } => "VHDX-REGIONS-OVERLAP",
+            Self::LogOverlapsStructuralRegion { .. } => "VHDX-LOG-OVERLAPS-STRUCTURAL-REGION",
+            Self::UnknownRequiredRegion { .. } => "VHDX-UNKNOWN-REQUIRED-REGION",
+            Self::RegionTableReservedNonZero { .. } => "VHDX-REGION-TABLE-RESERVED-NON-ZERO",
+            Self::RegionEntryCountZero { .. } => "VHDX-REGION-ENTRY-COUNT-ZERO",
+            Self::RegionTableChecksumMismatch { .. } => "VHDX-REGION-TABLE-CHECKSUM-MISMATCH",
+            Self::BothRegionTableCopiesInvalid => "VHDX-BOTH-REGION-TABLE-COPIES-INVALID",
+            Self::RegionTableCopyMismatch { .. } => "VHDX-REGION-TABLE-COPY-MISMATCH",
+            Self::MetadataMissing(..) => "VHDX-METADATA-MISSING",
+            Self::BlockSizeInvalid { .. } => "VHDX-BLOCK-SIZE-INVALID",
+            Self::LogicalSectorSizeInvalid { .. } => "VHDX-LOGICAL-SECTOR-SIZE-INVALID",
+            Self::VirtualDiskSizeInvalid { .. } => "VHDX-VIRTUAL-DISK-SIZE-INVALID",
+            Self::VirtualDiskSizeUnderreported { .. } => "VHDX-VIRTUAL-DISK-SIZE-UNDERREPORTED",
+            Self::DifferencingDisk => "VHDX-DIFFERENCING-DISK",
+            Self::PhysicalSectorSizeInvalid { .. } => "VHDX-PHYSICAL-SECTOR-SIZE-INVALID",
+            Self::VirtualDiskIdAllZeros => "VHDX-VIRTUAL-DISK-ID-ALL-ZEROS",
+            Self::MetadataItemsOverlap { .. } => "VHDX-METADATA-ITEMS-OVERLAP",
+            Self::MetadataItemBeyondRegion { .. } => "VHDX-METADATA-ITEM-BEYOND-REGION",
+            Self::LeaveBlocksAllocatedSet => "VHDX-LEAVE-BLOCKS-ALLOCATED-SET",
+            Self::MissingParentLocator => "VHDX-MISSING-PARENT-LOCATOR",
+            Self::VirtualDiskSizeOverreported { .. } => "VHDX-VIRTUAL-DISK-SIZE-OVERREPORTED",
+            Self::BatSizeMetadataMismatch { .. } => "VHDX-BAT-SIZE-METADATA-MISMATCH",
+            Self::BatEntryInStructuralRegion { .. } => "VHDX-BAT-ENTRY-IN-STRUCTURAL-REGION",
+            Self::MissingSectorBitmap { .. } => "VHDX-MISSING-SECTOR-BITMAP",
+            Self::UndefinedBlockState { .. } => "VHDX-UNDEFINED-BLOCK-STATE",
+            Self::UnmappedBlockInNonDifferencing { .. } => "VHDX-UNMAPPED-BLOCK-IN-NON-DIFFERENCING",
+            Self::GhostDataInAbsentBlock { .. } => "VHDX-GHOST-DATA-IN-ABSENT-BLOCK",
+            Self::BatEntryBeyondContainer { .. } => "VHDX-BAT-ENTRY-BEYOND-CONTAINER",
+            Self::BatEntryUnaligned { .. } => "VHDX-BAT-ENTRY-UNALIGNED",
+            Self::BatEntriesOverlap { .. } => "VHDX-BAT-ENTRIES-OVERLAP",
+            Self::PartiallyPresentBlock { .. } => "VHDX-PARTIALLY-PRESENT-BLOCK",
+            Self::SectorBitmapInvalidState { .. } => "VHDX-SECTOR-BITMAP-INVALID-STATE",
+            Self::TrailingData { .. } => "VHDX-TRAILING-DATA",
+            Self::CreatorStringAnomalous { .. } => "VHDX-CREATOR-STRING-ANOMALOUS",
+            Self::FileIdentifierReservedNonZero { .. } => "VHDX-FILE-IDENTIFIER-RESERVED-NON-ZERO",
+            Self::InterRegionGapNonZero { .. } => "VHDX-INTER-REGION-GAP-NON-ZERO",
+            Self::HeaderReservedNonZero { .. } => "VHDX-HEADER-RESERVED-NON-ZERO",
+        }
+    }
+}
+
+impl forensicnomicon::report::Observation for VhdxIntegrityAnomaly {
+    fn severity(&self) -> Option<Severity> {
+        Some(self.severity())
+    }
+    fn code(&self) -> &'static str {
+        self.code()
+    }
+    fn note(&self) -> String {
+        self.forensic_significance().to_string()
+    }
+    fn mitre(&self) -> &'static [&'static str] {
+        self.mitre_techniques()
     }
 }

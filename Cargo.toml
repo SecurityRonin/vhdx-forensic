@@ -1,6 +1,6 @@
 [package]
 name = "vhdx-forensic"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Pure-Rust read-only VHDX container reader for forensic analysis"
@@ -13,6 +13,7 @@ keywords = ["forensics", "vhdx", "disk-image", "windows", "container"]
 categories = ["parser-implementations", "filesystem"]
 
 [dependencies]
+forensicnomicon = { version = "0.3.0", path = "../forensicnomicon" }
 thiserror = "2"
 vhdx = { path = "../vhdx/vhdx" }
 

@@ -593,29 +593,29 @@ fn sequence_number_gap_large_detected() {
 fn phase2_severity_levels_correct() {
     use Severity::*;
     let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
-        (VhdxIntegrityAnomaly::FileWriteGuidAllZeros, Warning),
-        (VhdxIntegrityAnomaly::DataWriteGuidAllZeros, Warning),
+        (VhdxIntegrityAnomaly::FileWriteGuidAllZeros, Medium),
+        (VhdxIntegrityAnomaly::DataWriteGuidAllZeros, Medium),
         (
             VhdxIntegrityAnomaly::LogGuidWithNoLog {
                 log_guid: [0xAB; 16],
             },
-            Warning,
+            Medium,
         ),
         (
             VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog {
                 log_length: 0x0010_0000,
             },
-            Warning,
+            Medium,
         ),
-        (VhdxIntegrityAnomaly::LogVersionInvalid { version: 0 }, Warning),
-        (VhdxIntegrityAnomaly::VersionInvalid { version: 2 }, Warning),
+        (VhdxIntegrityAnomaly::LogVersionInvalid { version: 0 }, Medium),
+        (VhdxIntegrityAnomaly::VersionInvalid { version: 2 }, Medium),
         (
             VhdxIntegrityAnomaly::LogOffsetMisaligned { log_offset: 1 },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::LogLengthMisaligned { log_length: 512 },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::LogBeyondContainer {
@@ -623,13 +623,13 @@ fn phase2_severity_levels_correct() {
                 log_length: 1,
                 container_size: 0,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::LogInReservedZone {
                 log_offset: 0x0010_0000,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::SequenceNumberGapLarge {
@@ -637,7 +637,7 @@ fn phase2_severity_levels_correct() {
                 seq2: 0,
                 gap: 100,
             },
-            Warning,
+            Medium,
         ),
     ];
     for (anomaly, expected) in checks {
@@ -789,7 +789,7 @@ fn phase5_severity_levels_correct() {
                 vdisk_size: 0,
                 block_size: 0,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::BatEntryInStructuralRegion {
@@ -797,22 +797,22 @@ fn phase5_severity_levels_correct() {
                 file_offset: 0,
                 collides_with: "Header",
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::MissingSectorBitmap {
                 data_bat_index: 0,
                 bitmap_bat_index: 0,
             },
-            Warning,
+            Medium,
         ),
         (
             VhdxIntegrityAnomaly::UndefinedBlockState { bat_index: 0 },
-            Warning,
+            Medium,
         ),
         (
             VhdxIntegrityAnomaly::UnmappedBlockInNonDifferencing { bat_index: 0 },
-            Warning,
+            Medium,
         ),
         (
             VhdxIntegrityAnomaly::GhostDataInAbsentBlock {
@@ -820,7 +820,7 @@ fn phase5_severity_levels_correct() {
                 file_offset: 0,
                 nonzero_bytes: 1,
             },
-            Warning,
+            Medium,
         ),
     ];
     for (anomaly, expected) in checks {
@@ -971,11 +971,11 @@ fn phase4_severity_levels_correct() {
                 log_offset: 0,
                 log_length: 0,
             },
-            Warning,
+            Medium,
         ),
         (
             VhdxIntegrityAnomaly::LogEntrySignatureMissing { entry_offset: 0 },
-            Warning,
+            Medium,
         ),
         (
             VhdxIntegrityAnomaly::LogEntryCrcMismatch {
@@ -983,7 +983,7 @@ fn phase4_severity_levels_correct() {
                 computed: 0,
                 stored: 1,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::LogEntryGuidMismatch {
@@ -991,7 +991,7 @@ fn phase4_severity_levels_correct() {
                 entry_guid: [0u8; 16],
                 header_guid: [1u8; 16],
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::LogSequenceNumberGap {
@@ -999,7 +999,7 @@ fn phase4_severity_levels_correct() {
                 expected_seq: 2,
                 found_seq: 5,
             },
-            Error,
+            High,
         ),
     ];
     for (anomaly, expected) in checks {
@@ -1173,7 +1173,7 @@ fn phase3_severity_levels_correct() {
                 region: "BAT",
                 file_offset: 1,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::RegionBeyondContainer {
@@ -1181,7 +1181,7 @@ fn phase3_severity_levels_correct() {
                 declared_end: 0,
                 container_size: 0,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::RegionsOverlap {
@@ -1189,20 +1189,20 @@ fn phase3_severity_levels_correct() {
                 region_b: "Metadata",
                 overlap_offset: 0,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::LogOverlapsStructuralRegion {
                 log_offset: 0,
                 overlapping: "Header",
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::UnknownRequiredRegion {
                 guid_hex: String::new(),
             },
-            Warning,
+            Medium,
         ),
         (
             VhdxIntegrityAnomaly::RegionTableReservedNonZero {
@@ -1210,7 +1210,7 @@ fn phase3_severity_levels_correct() {
                 location: "header",
                 value: 1,
             },
-            Warning,
+            Medium,
         ),
     ];
     for (anomaly, expected) in checks {
@@ -1408,15 +1408,15 @@ fn virtual_disk_size_overreported_detected() {
 fn phase6_severity_levels_correct() {
     use Severity::*;
     let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
-        (VhdxIntegrityAnomaly::PhysicalSectorSizeInvalid { sector_size: 1024 }, Warning),
-        (VhdxIntegrityAnomaly::VirtualDiskIdAllZeros, Warning),
+        (VhdxIntegrityAnomaly::PhysicalSectorSizeInvalid { sector_size: 1024 }, Medium),
+        (VhdxIntegrityAnomaly::VirtualDiskIdAllZeros, Medium),
         (
             VhdxIntegrityAnomaly::MetadataItemsOverlap {
                 item_a_offset: 0,
                 item_b_offset: 4,
                 overlap_offset: 4,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::MetadataItemBeyondRegion {
@@ -1424,16 +1424,16 @@ fn phase6_severity_levels_correct() {
                 item_end: 0x1_0001,
                 region_end: 0x1_0000,
             },
-            Error,
+            High,
         ),
-        (VhdxIntegrityAnomaly::LeaveBlocksAllocatedSet, Warning),
-        (VhdxIntegrityAnomaly::MissingParentLocator, Error),
+        (VhdxIntegrityAnomaly::LeaveBlocksAllocatedSet, Medium),
+        (VhdxIntegrityAnomaly::MissingParentLocator, High),
         (
             VhdxIntegrityAnomaly::VirtualDiskSizeOverreported {
                 declared: 32 * (1u64 << 40),
                 bat_coverage: 1,
             },
-            Error,
+            High,
         ),
     ];
     for (anomaly, expected) in checks {
@@ -1518,7 +1518,7 @@ fn phase7_severity_levels_correct() {
                 start_offset: 512,
                 nonzero_count: 1,
             },
-            Warning,
+            Medium,
         ),
         (
             VhdxIntegrityAnomaly::InterRegionGapNonZero {
@@ -1535,7 +1535,7 @@ fn phase7_severity_levels_correct() {
                 offset_in_header: 80,
                 length: 4,
             },
-            Warning,
+            Medium,
         ),
     ];
     for (anomaly, expected) in checks {
@@ -1561,7 +1561,7 @@ fn severity_levels_are_sane() {
                 computed: 0,
                 stored: 1,
             },
-            Error,
+            High,
         ),
         (
             VhdxIntegrityAnomaly::DirtyLog {
@@ -1575,7 +1575,7 @@ fn severity_levels_are_sane() {
                 start_offset: 0,
                 size: 100,
             },
-            Warning,
+            Medium,
         ),
     ];
     for (anomaly, expected) in anomalies_with_expected_severity {
@@ -1686,7 +1686,7 @@ fn region_entry_count_zero_severity_is_warning() {
     let anomaly = VhdxIntegrityAnomaly::RegionEntryCountZero { copy: 1 };
     assert_eq!(
         anomaly.severity(),
-        Severity::Warning,
-        "RegionEntryCountZero must be Warning severity"
+        Severity::Medium,
+        "RegionEntryCountZero must be Medium severity"
     );
 }

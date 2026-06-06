@@ -43,7 +43,7 @@ fn qemu_empty_dynamic_virtual_disk_size() {
 #[test]
 fn qemu_empty_dynamic_no_error_anomalies() {
     let issues = VhdxIntegrity::new(&data("qemu_empty_dynamic.vhdx")).analyse();
-    let errors = anomalies_at_least(&issues, Severity::Error);
+    let errors = anomalies_at_least(&issues, Severity::High);
     assert!(
         errors.is_empty(),
         "qemu_empty_dynamic.vhdx must have no Error/Critical anomalies, got: {errors:#?}"
@@ -68,7 +68,7 @@ fn qemu_fixed_virtual_disk_size() {
 #[test]
 fn qemu_fixed_no_error_anomalies() {
     let issues = VhdxIntegrity::new(&data("qemu_fixed.vhdx")).analyse();
-    let errors = anomalies_at_least(&issues, Severity::Error);
+    let errors = anomalies_at_least(&issues, Severity::High);
     assert!(
         errors.is_empty(),
         "qemu_fixed.vhdx must have no Error/Critical anomalies, got: {errors:#?}"
