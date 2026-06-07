@@ -13,7 +13,7 @@ keywords = ["forensics", "vhdx", "disk-image", "windows", "container"]
 categories = ["parser-implementations", "filesystem"]
 
 [dependencies]
-forensicnomicon = { version = "0.3.0", path = "../forensicnomicon" }
+forensicnomicon = { version = "0.3.1" }
 thiserror = "2"
 vhdx = { path = "../vhdx/vhdx" }
 
