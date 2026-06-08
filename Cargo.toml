@@ -4,6 +4,7 @@ version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Forensic integrity analyzer for VHDX (Hyper-V) virtual disks — tamper/anomaly findings and in-memory repair, built on vhdx-core"
+exclude = ["tests/data/", "fuzz/", "corpus/", "benches/", ".github/"]
 license = "MIT"
 repository = "https://github.com/SecurityRonin/vhdx-forensic"
 homepage = "https://github.com/SecurityRonin/vhdx-forensic"
