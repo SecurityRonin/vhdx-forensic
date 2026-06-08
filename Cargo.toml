@@ -1,45 +1,24 @@
-[package]
-name = "vhdx-forensic"
-version = "0.2.0"
-edition = "2021"
-rust-version = "1.85"
-description = "Forensic integrity analyzer for VHDX (Hyper-V) virtual disks — tamper/anomaly findings and in-memory repair, built on vhdx-core"
-exclude = ["target/", "tests/data/", "fuzz/", "corpus/", "benches/", ".github/"]
-license = "MIT"
-repository = "https://github.com/SecurityRonin/vhdx-forensic"
-homepage = "https://github.com/SecurityRonin/vhdx-forensic"
-documentation = "https://docs.rs/vhdx-forensic"
-readme = "README.md"
-keywords = ["forensics", "vhdx", "disk-image", "windows", "container"]
-categories = ["parser-implementations", "filesystem"]
+[workspace]
+resolver = "2"
+members = ["core", "forensic", "cli"]
+[workspace.lints.rust]
+unsafe_code = "forbid"
 
-[dependencies]
-forensicnomicon = { version = "0.3.1" }
-thiserror = "2"
-vhdx = { version = "0.2.0", package = "vhdx-core" }
-
-[dev-dependencies]
-tempfile = "3"
-
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-module_name_repetitions = "allow"
-must_use_candidate = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-cast_possible_truncation = "allow"
-cast_possible_wrap = "allow"
-cast_sign_loss = "allow"
-return_self_not_must_use = "allow"
-doc_markdown = "allow"
-too_many_lines = "allow"
-manual_div_ceil = "allow"
-redundant_closure_for_method_calls = "allow"
-match_same_arms = "allow"
-manual_let_else = "allow"
-cast_lossless = "allow"
-if_not_else = "allow"
-manual_range_contains = "allow"
-
-[lints.rust]
-dead_code = "allow"
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+module_name_repetitions = { level = "allow", priority = 1 }
+must_use_candidate = { level = "allow", priority = 1 }
+missing_errors_doc = { level = "allow", priority = 1 }
+missing_panics_doc = { level = "allow", priority = 1 }
+cast_possible_truncation = { level = "allow", priority = 1 }
+cast_possible_wrap = { level = "allow", priority = 1 }
+cast_sign_loss = { level = "allow", priority = 1 }
+cast_precision_loss = { level = "allow", priority = 1 }
+format_push_string = { level = "allow", priority = 1 }
+format_collect = { level = "allow", priority = 1 }
+too_many_lines = { level = "allow", priority = 1 }
+items_after_statements = { level = "allow", priority = 1 }
+similar_names = { level = "allow", priority = 1 }
+manual_let_else = { level = "allow", priority = 1 }

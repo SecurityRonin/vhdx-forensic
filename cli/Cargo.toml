@@ -1,0 +1,21 @@
+[package]
+name = "vhdx-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "CLI tool for inspecting VHDX disk images"
+license = "MIT"
+repository = "https://github.com/SecurityRonin/vhdx-forensic"
+keywords = ["forensics", "vhdx", "disk-image"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "vhdx"
+path = "src/main.rs"
+
+[dependencies]
+vhdx = { version = "0.2.0", path = "../core", package = "vhdx-core" }
+clap = { version = "4", features = ["derive"] }
+
+[lints]
+workspace = true

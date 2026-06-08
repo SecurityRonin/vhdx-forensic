@@ -1,0 +1,27 @@
+[package]
+name = "vhdx-core"
+version = "0.2.1"
+edition = "2021"
+rust-version = "1.85"
+description = "Pure-Rust VHDX (Hyper-V) virtual-disk container library — reader (writer planned), hardened for forensic use"
+license = "MIT"
+repository = "https://github.com/SecurityRonin/vhdx-forensic"
+homepage = "https://github.com/SecurityRonin/vhdx-forensic"
+documentation = "https://docs.rs/vhdx-core"
+authors = ["Albert Hui"]
+keywords = ["forensics", "vhdx", "disk-image", "windows", "hyper-v"]
+categories = ["parser-implementations", "filesystem"]
+readme = "README.md"
+exclude = ["tests/data/"]
+
+[lib]
+name = "vhdx"
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
