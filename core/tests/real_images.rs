@@ -14,7 +14,8 @@ const DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
 #[test]
 fn qemu_empty_dynamic_virtual_disk_size() {
     let path = format!("{DATA_DIR}/qemu_empty_dynamic.vhdx");
-    let reader = vhdx::VhdxReader::open(Path::new(&path)).expect("qemu_empty_dynamic.vhdx must open");
+    let reader =
+        vhdx::VhdxReader::open(Path::new(&path)).expect("qemu_empty_dynamic.vhdx must open");
     assert_eq!(
         reader.virtual_disk_size(),
         16_777_216,
@@ -30,8 +31,7 @@ fn qemu_empty_dynamic_sector0_is_zeros() {
     reader.seek(SeekFrom::Start(0)).expect("seek");
     reader.read_exact(&mut buf).expect("read sector 0");
     assert_eq!(
-        buf,
-        [0u8; 512],
+        buf, [0u8; 512],
         "empty dynamic VHDX — sector 0 must read as zeros"
     );
 }
@@ -57,8 +57,7 @@ fn qemu_fixed_sector0_is_zeros() {
     reader.seek(SeekFrom::Start(0)).expect("seek");
     reader.read_exact(&mut buf).expect("read sector 0");
     assert_eq!(
-        buf,
-        [0u8; 512],
+        buf, [0u8; 512],
         "fixed VHDX with no filesystem — sector 0 must be zeros"
     );
 }
@@ -123,17 +122,14 @@ fn fat_parent_vhdx_opens_and_has_nonzero_size() {
 fn fat_differential_vhdx_does_not_panic() {
     let path = format!("{DATA_DIR}/fat-differential.vhdx");
     let result = vhdx::VhdxReader::open(Path::new(&path));
-    match &result {
-        Ok(reader) => {
-            assert!(
-                reader.virtual_disk_size() > 0,
-                "if fat-differential opens, it must report nonzero size"
-            );
-        }
-        Err(_) => {
-            // Returning Err for a differencing disk is acceptable;
-            // panicking is not.
-        }
+    if let Ok(reader) = &result {
+        assert!(
+            reader.virtual_disk_size() > 0,
+            "if fat-differential opens, it must report nonzero size"
+        );
+    } else {
+        // Returning Err for a differencing disk is acceptable;
+        // panicking is not.
     }
 }
 

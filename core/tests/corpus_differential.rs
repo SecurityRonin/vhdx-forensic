@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-/// Corpus differential tests: bytes from VhdxReader must match `qemu-img convert -O raw`.
+/// Corpus differential tests: bytes from `VhdxReader` must match `qemu-img convert -O raw`.
 ///
 /// These tests skip automatically if qemu-img is not installed, so they run in CI
 /// only on machines with QEMU available (the dev machine). They verify correctness
@@ -29,11 +29,7 @@ fn corpus_vhdx_matches_qemu_raw(corpus: &Path) {
         .status()
         .expect("spawn qemu-img")
         .success();
-    assert!(
-        ok,
-        "qemu-img convert failed for {}",
-        corpus.display()
-    );
+    assert!(ok, "qemu-img convert failed for {}", corpus.display());
     let ref_data = std::fs::read(&raw_path).expect("read reference raw");
 
     let mut reader = VhdxReader::open(corpus).expect("open vhdx");
@@ -51,9 +47,7 @@ fn corpus_vhdx_matches_qemu_raw(corpus: &Path) {
     while offset < vhdx_size {
         let len = 512.min(vhdx_size - offset);
         let mut buf = vec![0u8; len];
-        reader
-            .seek(SeekFrom::Start(offset as u64))
-            .expect("seek");
+        reader.seek(SeekFrom::Start(offset as u64)).expect("seek");
         reader.read_exact(&mut buf).expect("read");
         assert_eq!(
             buf,

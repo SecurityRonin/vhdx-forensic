@@ -302,14 +302,17 @@ fn cannot_repair_bat_size_metadata_mismatch() {
     let mut repair = VhdxRepair::new(image);
     let report = repair.attempt_repair();
     assert!(
-        report
-            .cannot_repair
-            .iter()
-            .any(|c| matches!(c.anomaly, VhdxIntegrityAnomaly::BatSizeMetadataMismatch { .. })),
+        report.cannot_repair.iter().any(|c| matches!(
+            c.anomaly,
+            VhdxIntegrityAnomaly::BatSizeMetadataMismatch { .. }
+        )),
         "BatSizeMetadataMismatch should appear in cannot_repair, got: {report:#?}"
     );
     for c in &report.cannot_repair {
-        if matches!(c.anomaly, VhdxIntegrityAnomaly::BatSizeMetadataMismatch { .. }) {
+        if matches!(
+            c.anomaly,
+            VhdxIntegrityAnomaly::BatSizeMetadataMismatch { .. }
+        ) {
             assert!(
                 c.reason.contains("which field"),
                 "reason must mention 'which field', got: {:?}",
@@ -371,7 +374,10 @@ fn cannot_repair_ghost_data_in_absent_block() {
         "GhostDataInAbsentBlock(0) should appear in cannot_repair — attempt_repair must call check_bat_ghost_data(), got: {report:#?}"
     );
     for c in &report.cannot_repair {
-        if matches!(c.anomaly, VhdxIntegrityAnomaly::GhostDataInAbsentBlock { .. }) {
+        if matches!(
+            c.anomaly,
+            VhdxIntegrityAnomaly::GhostDataInAbsentBlock { .. }
+        ) {
             assert!(
                 c.reason.contains("evidence"),
                 "reason must mention 'evidence', got: {:?}",
@@ -387,7 +393,7 @@ fn cannot_repair_ghost_data_in_absent_block() {
 fn cannot_repair_metadata_items_overlap() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
     // Entry 1 item_offset is at META_BASE+80; change from 0x10008 → 0x10004 to overlap Entry 0's [0x10000,0x10008).
-    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&0x1000_4u32.to_le_bytes());
+    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&0x0001_0004_u32.to_le_bytes());
     let mut repair = VhdxRepair::new(image);
     let report = repair.attempt_repair();
     assert!(
@@ -420,14 +426,17 @@ fn cannot_repair_log_guid_all_zeros_with_dirty_log() {
     let mut repair = VhdxRepair::new(image);
     let report = repair.attempt_repair();
     assert!(
-        report
-            .cannot_repair
-            .iter()
-            .any(|c| matches!(c.anomaly, VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog { .. })),
+        report.cannot_repair.iter().any(|c| matches!(
+            c.anomaly,
+            VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog { .. }
+        )),
         "LogGuidAllZerosWithDirtyLog should appear in cannot_repair, got: {report:#?}"
     );
     for c in &report.cannot_repair {
-        if matches!(c.anomaly, VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog { .. }) {
+        if matches!(
+            c.anomaly,
+            VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog { .. }
+        ) {
             assert!(
                 c.reason.contains("contradictory"),
                 "reason must mention 'contradictory', got: {:?}",

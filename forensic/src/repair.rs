@@ -1,7 +1,7 @@
+use crate::integrity::{VhdxIntegrity, VhdxIntegrityAnomaly};
 use vhdx::header::{
     crc32c, HEADER1_OFFSET, HEADER2_OFFSET, HEADER_SIZE, REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET,
 };
-use crate::integrity::{VhdxIntegrity, VhdxIntegrityAnomaly};
 use vhdx::region::REGION_TABLE_CRC_COVERAGE;
 
 /// A single repair action that was successfully applied to the image.
@@ -306,10 +306,18 @@ impl VhdxRepair {
 
 #[inline]
 fn header_offset(copy: u8) -> usize {
-    if copy == 1 { HEADER1_OFFSET as usize } else { HEADER2_OFFSET as usize }
+    if copy == 1 {
+        HEADER1_OFFSET as usize
+    } else {
+        HEADER2_OFFSET as usize
+    }
 }
 
 #[inline]
 fn rt_offset(copy: u8) -> usize {
-    if copy == 1 { REGION_TABLE1_OFFSET as usize } else { REGION_TABLE2_OFFSET as usize }
+    if copy == 1 {
+        REGION_TABLE1_OFFSET as usize
+    } else {
+        REGION_TABLE2_OFFSET as usize
+    }
 }

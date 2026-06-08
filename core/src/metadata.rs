@@ -1,5 +1,5 @@
-use crate::error::{Result, VhdxError};
 use crate::bytes::{le_u16, le_u32, le_u64};
+use crate::error::{Result, VhdxError};
 
 pub const METADATA_TABLE_SIGNATURE: &[u8; 8] = b"metadata";
 
@@ -109,10 +109,8 @@ pub fn parse_metadata(data: &[u8], region_offset: u64, region_len: u32) -> Resul
         }
         let mut guid = [0u8; 16];
         guid.copy_from_slice(&region[base..base + 16]);
-        let item_offset =
-            le_u32(region, base + 16) as usize;
-        let item_len =
-            le_u32(region, base + 20) as usize;
+        let item_offset = le_u32(region, base + 16) as usize;
+        let item_len = le_u32(region, base + 20) as usize;
 
         let data_start = start + item_offset;
         let data_end = data_start + item_len;

@@ -1,5 +1,5 @@
-use crate::error::{Result, VhdxError};
 use crate::bytes::{le_u32, le_u64};
+use crate::error::{Result, VhdxError};
 use crate::header::crc32c;
 
 pub const REGION_TABLE_SIGNATURE: &[u8; 4] = b"regi";
@@ -55,8 +55,7 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
     if crc32c(&buf) != stored_crc {
         return Err(VhdxError::InvalidRegionTable);
     }
-    let entry_count =
-        (le_u32(slice, 8) as usize).min(REGION_ENTRY_COUNT_MAX);
+    let entry_count = (le_u32(slice, 8) as usize).min(REGION_ENTRY_COUNT_MAX);
     let container_len = data.len();
     let mut bat: Option<RegionEntry> = None;
     let mut metadata: Option<RegionEntry> = None;

@@ -28,14 +28,20 @@ fn dfvfs_ext2_vhdx_opens() {
 fn dfvfs_ext2_vhdx_virtual_disk_size() {
     let reader = VhdxReader::from_bytes(data("ext2.vhdx")).expect("must open");
     // Cross-validated with: qemu-img info ext2.vhdx → virtual size: 4 MiB (4194304 bytes)
-    assert_eq!(reader.virtual_disk_size(), 4 * 1024 * 1024, "virtual_disk_size must be 4 MiB");
+    assert_eq!(
+        reader.virtual_disk_size(),
+        4 * 1024 * 1024,
+        "virtual_disk_size must be 4 MiB"
+    );
 }
 
 #[test]
 fn dfvfs_ext2_vhdx_sector_0_readable() {
     let mut reader = VhdxReader::from_bytes(data("ext2.vhdx")).expect("must open");
     let mut buf = [0u8; 512];
-    reader.read_exact(&mut buf).expect("sector 0 must be readable without error");
+    reader
+        .read_exact(&mut buf)
+        .expect("sector 0 must be readable without error");
 }
 
 #[test]
@@ -61,21 +67,28 @@ fn dfvfs_ext2_vhdx_ghost_data_clean() {
 
 #[test]
 fn dfvfs_fat_parent_vhdx_opens() {
-    VhdxReader::from_bytes(data("fat-parent.vhdx")).expect("fat-parent.vhdx must open successfully");
+    VhdxReader::from_bytes(data("fat-parent.vhdx"))
+        .expect("fat-parent.vhdx must open successfully");
 }
 
 #[test]
 fn dfvfs_fat_parent_vhdx_virtual_disk_size() {
     let reader = VhdxReader::from_bytes(data("fat-parent.vhdx")).expect("must open");
     // Cross-validated with: qemu-img info fat-parent.vhdx → virtual size: 4 MiB (4194304 bytes)
-    assert_eq!(reader.virtual_disk_size(), 4 * 1024 * 1024, "virtual_disk_size must be 4 MiB");
+    assert_eq!(
+        reader.virtual_disk_size(),
+        4 * 1024 * 1024,
+        "virtual_disk_size must be 4 MiB"
+    );
 }
 
 #[test]
 fn dfvfs_fat_parent_vhdx_sector_0_readable() {
     let mut reader = VhdxReader::from_bytes(data("fat-parent.vhdx")).expect("must open");
     let mut buf = [0u8; 512];
-    reader.read_exact(&mut buf).expect("sector 0 must be readable without error");
+    reader
+        .read_exact(&mut buf)
+        .expect("sector 0 must be readable without error");
 }
 
 #[test]
@@ -120,7 +133,9 @@ fn dfvfs_fat_differential_vhdx_emits_differencing_disk_warning() {
     use vhdx_forensic::VhdxIntegrityAnomaly;
     let issues = VhdxIntegrity::new(&data("fat-differential.vhdx")).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::DifferencingDisk)),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::DifferencingDisk)),
         "fat-differential.vhdx must be identified as a differencing disk"
     );
 }

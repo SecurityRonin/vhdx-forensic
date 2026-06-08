@@ -3,11 +3,13 @@ use vhdx::header::{
     REGION_TABLE2_OFFSET,
 };
 use vhdx::metadata::{
-    GUID_FILE_PARAMETERS, GUID_LOGICAL_SECTOR_SIZE, GUID_PARENT_LOCATOR,
-    GUID_PHYSICAL_SECTOR_SIZE, GUID_VIRTUAL_DISK_ID, GUID_VIRTUAL_DISK_SIZE,
-    METADATA_TABLE_SIGNATURE,
+    GUID_FILE_PARAMETERS, GUID_LOGICAL_SECTOR_SIZE, GUID_PARENT_LOCATOR, GUID_PHYSICAL_SECTOR_SIZE,
+    GUID_VIRTUAL_DISK_ID, GUID_VIRTUAL_DISK_SIZE, METADATA_TABLE_SIGNATURE,
 };
-use vhdx::region::{BAT_GUID, MB, METADATA_GUID, REGION_ENTRY_SIZE, REGION_TABLE_CRC_COVERAGE, REGION_TABLE_SIGNATURE};
+use vhdx::region::{
+    BAT_GUID, MB, METADATA_GUID, REGION_ENTRY_SIZE, REGION_TABLE_CRC_COVERAGE,
+    REGION_TABLE_SIGNATURE,
+};
 use vhdx::FILE_MAGIC;
 
 const MIN_CONTAINER_SIZE: u64 = 0x0005_0000; // 320 KB (5 × 64 KB structural slots)
@@ -82,39 +84,53 @@ fn block_crc(block: &[u8]) -> u32 {
 /// Returns `Ok(())` if the signature matches and the CRC is valid.
 /// Returns `Err((computed, stored))` on any failure; both are 0 when the block
 /// is unreadable or has a wrong signature.
-fn verify_block_crc(
-    data: &[u8],
-    offset: usize,
-    size: usize,
-    sig: &[u8],
-) -> Result<(), (u32, u32)> {
-    let end = offset.checked_add(size).filter(|&e| e <= data.len()).ok_or((0u32, 0u32))?;
+fn verify_block_crc(data: &[u8], offset: usize, size: usize, sig: &[u8]) -> Result<(), (u32, u32)> {
+    let end = offset
+        .checked_add(size)
+        .filter(|&e| e <= data.len())
+        .ok_or((0u32, 0u32))?;
     let block = &data[offset..end];
     if !block.starts_with(sig) {
         return Err((0, 0));
     }
     let stored = r32(block, 4);
     let computed = block_crc(block);
-    if computed == stored { Ok(()) } else { Err((computed, stored)) }
+    if computed == stored {
+        Ok(())
+    } else {
+        Err((computed, stored))
+    }
 }
 
 /// Map a copy index to the corresponding header byte offset.
 #[inline]
 fn header_offset(copy: u8) -> usize {
-    if copy == 1 { HEADER1_OFFSET as usize } else { HEADER2_OFFSET as usize }
+    if copy == 1 {
+        HEADER1_OFFSET as usize
+    } else {
+        HEADER2_OFFSET as usize
+    }
 }
 
 /// Map a copy index to the corresponding region table byte offset.
 #[inline]
 fn rt_offset(copy: u8) -> usize {
-    if copy == 1 { REGION_TABLE1_OFFSET as usize } else { REGION_TABLE2_OFFSET as usize }
+    if copy == 1 {
+        REGION_TABLE1_OFFSET as usize
+    } else {
+        REGION_TABLE2_OFFSET as usize
+    }
 }
 
 /// Resolve a region entry GUID to its canonical name, or `None` for unknown GUIDs.
 fn region_name_for_guid(guid: &[u8; 16]) -> Option<&'static str> {
-    if guid == &BAT_GUID { Some("BAT") }
-    else if guid == &METADATA_GUID { Some("Metadata") }
-    else { None }
+    if guid == &BAT_GUID {
+        Some("BAT")
+    } else if guid == &METADATA_GUID {
+        Some("Metadata")
+    } else {
+        None
+    }
 }
 
 /// Byte offset of BAT entry `index` within the image given the BAT region start.
@@ -127,19 +143,19 @@ fn bat_entry_pos(bat_offset: u64, index: usize) -> usize {
 /// and the metadata region. Threaded through all layer checks to avoid redundant
 /// re-parsing of the same region tables and metadata on each check function call.
 struct ParsedRegions {
-    bat_offset:  u64,
-    bat_length:  u32,
+    bat_offset: u64,
+    bat_length: u32,
     meta_offset: u64,
     meta_length: u32,
     /// Raw BlockSize from FileParameters; None if item was absent or unreadable.
-    block_size:  Option<u32>,
+    block_size: Option<u32>,
     /// Raw LogicalSectorSize; None if item absent.
-    logical_ss:  Option<u32>,
+    logical_ss: Option<u32>,
     /// Raw VirtualDiskSize; None if absent.
-    vdisk_size:  Option<u64>,
+    vdisk_size: Option<u64>,
     /// Computed from block_size/logical_ss; `None` when not computable.
     chunk_ratio: Option<u64>,
-    has_parent:  bool,
+    has_parent: bool,
     leave_alloc: bool,
     /// PhysicalSectorSize from metadata, if the item is present.
     physical_ss: Option<u32>,
@@ -466,7 +482,10 @@ pub enum VhdxIntegrityAnomaly {
     /// section (bytes 512–65535, after the creator string). Normal parsers
     /// skip this area entirely — it is a low-visibility location for
     /// data hiding or steganographic payloads.
-    FileIdentifierReservedNonZero { start_offset: u64, nonzero_count: u64 },
+    FileIdentifierReservedNonZero {
+        start_offset: u64,
+        nonzero_count: u64,
+    },
     /// Non-zero bytes exist in a gap between two adjacent structural regions
     /// (e.g. the padding between Header1 and Header2, or between Region
     /// Table2 and the first user region). Hyper-V zeros these gaps at creation;
@@ -481,7 +500,11 @@ pub enum VhdxIntegrityAnomaly {
     /// valid header copy. These bytes are CRC-protected but not semantically
     /// defined — an attacker can write data there and update the CRC to
     /// produce a structurally valid header that carries hidden content.
-    HeaderReservedNonZero { copy: u8, offset_in_header: u16, length: u16 },
+    HeaderReservedNonZero {
+        copy: u8,
+        offset_in_header: u16,
+        length: u16,
+    },
 }
 
 impl VhdxIntegrityAnomaly {
@@ -512,8 +535,9 @@ impl VhdxIntegrityAnomaly {
             | Self::SequenceNumbersIdentical { .. }
             | Self::TrailingData { .. }
             | Self::CreatorStringAnomalous { .. } => Severity::Medium,
-            Self::BatEntryInStructuralRegion { .. }
-            | Self::BatSizeMetadataMismatch { .. } => Severity::High,
+            Self::BatEntryInStructuralRegion { .. } | Self::BatSizeMetadataMismatch { .. } => {
+                Severity::High
+            }
             Self::MissingSectorBitmap { .. }
             | Self::UndefinedBlockState { .. }
             | Self::UnmappedBlockInNonDifferencing { .. }
@@ -562,263 +586,326 @@ impl VhdxIntegrityAnomaly {
     /// A human-readable explanation of the forensic significance of this anomaly.
     pub fn forensic_significance(&self) -> &'static str {
         match self {
-            Self::BadMagic { .. } =>
+            Self::BadMagic { .. } => {
                 "The 8-byte VHDX magic signature is incorrect. The file is either not a VHDX \
                  image, was truncated before the identifier section, or the magic was overwritten \
-                 to disguise the container's true format.",
-            Self::ContainerTruncated { .. } =>
+                 to disguise the container's true format."
+            }
+            Self::ContainerTruncated { .. } => {
                 "The file is smaller than the minimum VHDX structural size (320 KB). The \
                  container was either incompletely written, deliberately truncated to destroy \
-                 evidence, or is a stub masquerading as a full image.",
-            Self::HeaderChecksumMismatch { .. } =>
+                 evidence, or is a stub masquerading as a full image."
+            }
+            Self::HeaderChecksumMismatch { .. } => {
                 "A header copy's CRC32C does not match its content. The header was modified \
                  after the last legitimate Hyper-V write — either targeted tampering or \
-                 storage-layer corruption of the most security-critical region.",
-            Self::BothHeaderCopiesInvalid =>
+                 storage-layer corruption of the most security-critical region."
+            }
+            Self::BothHeaderCopiesInvalid => {
                 "Both redundant header copies have invalid CRC32C. The entire header region \
                  was overwritten or corrupted, rendering the disk identity, log pointer, and \
-                 sequence numbers unverifiable.",
-            Self::SequenceNumbersIdentical { .. } =>
+                 sequence numbers unverifiable."
+            }
+            Self::SequenceNumbersIdentical { .. } => {
                 "Both header copies share the same sequence number. Hyper-V increments the \
                  sequence number on every write cycle; identical values indicate one copy was \
-                 cloned from the other, bypassing the normal redundancy mechanism.",
-            Self::BothSequenceNumbersZero =>
+                 cloned from the other, bypassing the normal redundancy mechanism."
+            }
+            Self::BothSequenceNumbersZero => {
                 "Both header sequence numbers are zero. A written disk always has at least one \
                  non-zero sequence number; all-zero values suggest a manually constructed \
-                 header or a factory-reset operation outside normal Hyper-V control.",
-            Self::HeaderCopyMismatch { .. } =>
+                 header or a factory-reset operation outside normal Hyper-V control."
+            }
+            Self::HeaderCopyMismatch { .. } => {
                 "Two CRC-valid header copies disagree on a named field. This is structurally \
                  impossible through normal Hyper-V operation — one copy was patched and \
-                 re-signed after the fact to introduce conflicting disk metadata.",
-            Self::LogZeroedButDirty { .. } =>
+                 re-signed after the fact to introduce conflicting disk metadata."
+            }
+            Self::LogZeroedButDirty { .. } => {
                 "The header declares a dirty log but all log bytes are zero. This is used to \
                  preserve the dirty-log indicator (blocking Hyper-V from mounting the disk) \
-                 while destroying the log entries that would reveal which blocks were written.",
-            Self::LogEntrySignatureMissing { .. } =>
+                 while destroying the log entries that would reveal which blocks were written."
+            }
+            Self::LogEntrySignatureMissing { .. } => {
                 "A log entry position does not contain the expected 'loge' signature. The log \
                  region was overwritten or the log offset was manipulated to point into an \
-                 area that was never written as log data.",
-            Self::LogEntryCrcMismatch { .. } =>
+                 area that was never written as log data."
+            }
+            Self::LogEntryCrcMismatch { .. } => {
                 "A log entry's CRC32C is invalid. The entry was modified after writing — log \
                  tampering to alter the on-disk record of which blocks were changed before \
-                 the last checkpoint.",
-            Self::LogEntryGuidMismatch { .. } =>
+                 the last checkpoint."
+            }
+            Self::LogEntryGuidMismatch { .. } => {
                 "A log entry's LogGuid does not match the active header's LogGuid. The log \
                  was transplanted from a different VHDX image, replacing the authentic \
-                 write history with entries from another disk.",
-            Self::LogSequenceNumberGap { .. } =>
+                 write history with entries from another disk."
+            }
+            Self::LogSequenceNumberGap { .. } => {
                 "Consecutive log entries have a gap in sequence numbers. Entries were deleted \
                  from the middle of the log sequence to remove evidence of specific write \
-                 operations that occurred between the surviving entries.",
-            Self::FileWriteGuidAllZeros =>
+                 operations that occurred between the surviving entries."
+            }
+            Self::FileWriteGuidAllZeros => {
                 "The FileWriteGuid (disk-level identity GUID) is all zeros. This GUID is \
                  updated on every write cycle and used to correlate images in audit trails; \
-                 wiping it severs the chain of custody and prevents linkage to prior captures.",
-            Self::DataWriteGuidAllZeros =>
+                 wiping it severs the chain of custody and prevents linkage to prior captures."
+            }
+            Self::DataWriteGuidAllZeros => {
                 "The DataWriteGuid (data-layer identity GUID) is all zeros. This GUID tracks \
                  the data state for differencing disk chain verification; zeroing it breaks \
-                 parent-image validation and obscures whether data blocks were modified.",
-            Self::LogGuidWithNoLog { .. } =>
+                 parent-image validation and obscures whether data blocks were modified."
+            }
+            Self::LogGuidWithNoLog { .. } => {
                 "The header contains a non-zero LogGuid but LogLength is zero. A non-zero \
                  LogGuid with no log region indicates the log was cleared without resetting \
-                 the GUID — a sign of manual header manipulation between write cycles.",
-            Self::LogGuidAllZerosWithDirtyLog { .. } =>
+                 the GUID — a sign of manual header manipulation between write cycles."
+            }
+            Self::LogGuidAllZerosWithDirtyLog { .. } => {
                 "A non-zero LogLength exists but LogGuid is all zeros — a combination that \
                  is structurally impossible through normal Hyper-V operation. This indicates \
-                 a manually constructed dirty-log header designed to block mounting.",
-            Self::LogVersionInvalid { .. } =>
+                 a manually constructed dirty-log header designed to block mounting."
+            }
+            Self::LogVersionInvalid { .. } => {
                 "The LogVersion field is not 1, the only valid value defined by MS-VHDX. \
                  Any other value indicates a format version violation or direct binary \
-                 patching of the header without using a legitimate VHDX writer.",
-            Self::VersionInvalid { .. } =>
+                 patching of the header without using a legitimate VHDX writer."
+            }
+            Self::VersionInvalid { .. } => {
                 "The Version field is not 1, the only defined VHDX format version. This \
                  value is set at creation and never changed; an unexpected value indicates \
-                 a hand-crafted header or an attempt to trigger version-specific parser bugs.",
-            Self::LogOffsetMisaligned { .. } =>
+                 a hand-crafted header or an attempt to trigger version-specific parser bugs."
+            }
+            Self::LogOffsetMisaligned { .. } => {
                 "The LogOffset is not 1 MB aligned, violating the VHDX specification. \
                  All log regions must start at MB boundaries; misalignment indicates manual \
-                 patching of the log pointer to redirect log operations to an arbitrary offset.",
-            Self::LogLengthMisaligned { .. } =>
+                 patching of the log pointer to redirect log operations to an arbitrary offset."
+            }
+            Self::LogLengthMisaligned { .. } => {
                 "The LogLength is not a multiple of 1 MB. The specification requires MB \
                  granularity for log regions; a misaligned length indicates direct binary \
-                 editing of the header outside any legitimate VHDX tool.",
-            Self::LogBeyondContainer { .. } =>
+                 editing of the header outside any legitimate VHDX tool."
+            }
+            Self::LogBeyondContainer { .. } => {
                 "The declared log region extends past the end of the file. The log physically \
                  does not exist in this container; the log pointer was set to reference \
-                 data that is not present, possibly to trigger parser overflow vulnerabilities.",
-            Self::LogInReservedZone { .. } =>
+                 data that is not present, possibly to trigger parser overflow vulnerabilities."
+            }
+            Self::LogInReservedZone { .. } => {
                 "The LogOffset places the log inside the header section (below 1 MB). \
                  Log replay would overwrite VHDX structural data — a log-poisoning \
-                 attack that can corrupt headers or region tables on mount.",
-            Self::SequenceNumberGapLarge { .. } =>
+                 attack that can corrupt headers or region tables on mount."
+            }
+            Self::SequenceNumberGapLarge { .. } => {
                 "The two valid header copies have sequence numbers differing by more than 1. \
                  A gap larger than 1 means write cycles occurred between the two copies being \
-                 updated — one copy was patched without going through a legitimate write.",
-            Self::DirtyLog { .. } =>
+                 updated — one copy was patched without going through a legitimate write."
+            }
+            Self::DirtyLog { .. } => {
                 "The active header declares a non-zero log region, indicating uncommitted \
                  writes were present when the image was captured. This is normal for live \
-                 snapshots but means the visible data may not reflect the final committed state.",
-            Self::RegionMisaligned { .. } =>
+                 snapshots but means the visible data may not reflect the final committed state."
+            }
+            Self::RegionMisaligned { .. } => {
                 "A region entry's file_offset is not 1 MB aligned. All VHDX regions must \
                  start at MB boundaries per the specification; misalignment indicates manual \
-                 patching of the region table to redirect a structural region.",
-            Self::RegionBeyondContainer { .. } =>
+                 patching of the region table to redirect a structural region."
+            }
+            Self::RegionBeyondContainer { .. } => {
                 "A declared region extends past the end of the container file. The structural \
                  region physically does not exist; reading it would access out-of-bounds memory \
-                 — a potential parser vulnerability or evidence of container truncation.",
-            Self::RegionsOverlap { .. } =>
+                 — a potential parser vulnerability or evidence of container truncation."
+            }
+            Self::RegionsOverlap { .. } => {
                 "Two declared regions (BAT and Metadata) have overlapping byte ranges. \
                  Overlapping regions are structurally impossible in a valid VHDX — only \
-                 direct binary manipulation of the region table can produce this state.",
-            Self::LogOverlapsStructuralRegion { .. } =>
+                 direct binary manipulation of the region table can produce this state."
+            }
+            Self::LogOverlapsStructuralRegion { .. } => {
                 "The dirty-log region overlaps a structural zone. Log replay would overwrite \
                  VHDX structural data (headers, region tables, or the file identifier) — a \
-                 targeted log-poisoning vector for corrupting parser-critical structures.",
-            Self::UnknownRequiredRegion { .. } =>
+                 targeted log-poisoning vector for corrupting parser-critical structures."
+            }
+            Self::UnknownRequiredRegion { .. } => {
                 "A region table entry has Required=1 with an unrecognized GUID. Hyper-V \
                  refuses to open files with unknown required regions; this state cannot \
-                 occur through legitimate tools and indicates a hand-crafted region table.",
-            Self::RegionTableReservedNonZero { .. } =>
+                 occur through legitimate tools and indicates a hand-crafted region table."
+            }
+            Self::RegionTableReservedNonZero { .. } => {
                 "Reserved bytes in the region table are non-zero. These bytes are \
                  CRC-protected but semantically undefined; non-zero content can carry \
-                 steganographic payloads that survive most sanitization tools.",
-            Self::RegionEntryCountZero { .. } =>
+                 steganographic payloads that survive most sanitization tools."
+            }
+            Self::RegionEntryCountZero { .. } => {
                 "The region table declares zero region entries. No BAT or Metadata region \
                  is registered, making the virtual disk undecodable by standard parsers. \
                  A legitimate VHDX always declares both BAT and Metadata after the first \
                  write cycle; a zero count indicates post-initialization patching — either \
-                 to block forensic analysis or as part of a deliberately invalid container.",
-            Self::RegionTableChecksumMismatch { .. } =>
+                 to block forensic analysis or as part of a deliberately invalid container."
+            }
+            Self::RegionTableChecksumMismatch { .. } => {
                 "A region table copy's CRC32C is invalid. The region table was modified \
                  after the last legitimate write — targeted tampering of the structure \
-                 that maps the physical layout of BAT and Metadata regions.",
-            Self::BothRegionTableCopiesInvalid =>
+                 that maps the physical layout of BAT and Metadata regions."
+            }
+            Self::BothRegionTableCopiesInvalid => {
                 "Both redundant region table copies have invalid CRC32C. The entire \
                  region layout is unverifiable; BAT and Metadata offsets cannot be \
-                 trusted, preventing reliable forensic decoding of the container.",
-            Self::RegionTableCopyMismatch { .. } =>
+                 trusted, preventing reliable forensic decoding of the container."
+            }
+            Self::RegionTableCopyMismatch { .. } => {
                 "Two CRC-valid region table copies disagree on a region's offset or size. \
                  One was patched and re-signed; the copies now describe different physical \
-                 layouts, making the true data location ambiguous.",
-            Self::MetadataMissing(_) =>
+                 layouts, making the true data location ambiguous."
+            }
+            Self::MetadataMissing(_) => {
                 "A required metadata item (BlockSize or VirtualDiskSize) is absent. \
                  These items are mandatory per MS-VHDX; their absence indicates a \
-                 deliberately stripped or hand-constructed metadata table.",
-            Self::BlockSizeInvalid { .. } =>
+                 deliberately stripped or hand-constructed metadata table."
+            }
+            Self::BlockSizeInvalid { .. } => {
                 "The BlockSize metadata item has an invalid value (outside [1 MB, 256 MB] \
                  or not a power of two). An invalid block size corrupts BAT index \
-                 calculations, causing every block lookup to produce incorrect offsets.",
-            Self::LogicalSectorSizeInvalid { .. } =>
+                 calculations, causing every block lookup to produce incorrect offsets."
+            }
+            Self::LogicalSectorSizeInvalid { .. } => {
                 "The LogicalSectorSize is not 512 or 4096. Only these two values are \
                  defined by MS-VHDX; any other value indicates metadata tampering that \
-                 breaks sector-to-LBA mapping for the entire virtual disk.",
-            Self::VirtualDiskSizeInvalid { .. } =>
+                 breaks sector-to-LBA mapping for the entire virtual disk."
+            }
+            Self::VirtualDiskSizeInvalid { .. } => {
                 "The VirtualDiskSize is zero, exceeds 64 TiB, or is not a multiple of \
                  the logical sector size. An invalid size corrupts the block count used \
-                 to build the BAT index and may cause reads to access arbitrary offsets.",
-            Self::VirtualDiskSizeUnderreported { .. } =>
+                 to build the BAT index and may cause reads to access arbitrary offsets."
+            }
+            Self::VirtualDiskSizeUnderreported { .. } => {
                 "The declared VirtualDiskSize is smaller than the range covered by \
                  present BAT entries. Data beyond the declared size is hidden from \
-                 parsers that respect the VirtualDiskSize bound — a capacity-hiding attack.",
-            Self::DifferencingDisk =>
+                 parsers that respect the VirtualDiskSize bound — a capacity-hiding attack."
+            }
+            Self::DifferencingDisk => {
                 "The image declares a differencing disk parent (HasParent=true). The \
                  full data surface cannot be recovered without the parent chain; \
-                 differencing disks are also used to split evidence across multiple files.",
-            Self::PhysicalSectorSizeInvalid { .. } =>
+                 differencing disks are also used to split evidence across multiple files."
+            }
+            Self::PhysicalSectorSizeInvalid { .. } => {
                 "The PhysicalSectorSize metadata item is not 512 or 4096. Only these \
                  values are permitted by MS-VHDX §2.5.7; an invalid value indicates \
-                 direct metadata manipulation outside any legitimate VHDX writer.",
-            Self::VirtualDiskIdAllZeros =>
+                 direct metadata manipulation outside any legitimate VHDX writer."
+            }
+            Self::VirtualDiskIdAllZeros => {
                 "The VirtualDiskId GUID is all zeros. This GUID is a unique disk \
                  identity written at creation; zeroing it severs the audit trail, \
-                 prevents correlation with cloned images, and breaks chain-of-custody.",
-            Self::MetadataItemsOverlap { .. } =>
+                 prevents correlation with cloned images, and breaks chain-of-custody."
+            }
+            Self::MetadataItemsOverlap { .. } => {
                 "Two metadata item data ranges overlap within the item area. Overlapping \
                  items are structurally impossible without direct binary manipulation — \
-                 the ambiguous layout can be exploited to confuse different parsers.",
-            Self::MetadataItemBeyondRegion { .. } =>
+                 the ambiguous layout can be exploited to confuse different parsers."
+            }
+            Self::MetadataItemBeyondRegion { .. } => {
                 "A metadata item's data range extends past the end of the metadata \
                  region. The item cannot be safely read; this state indicates manual \
-                 patching of the metadata table to create out-of-bounds access conditions.",
-            Self::LeaveBlocksAllocatedSet =>
+                 patching of the metadata table to create out-of-bounds access conditions."
+            }
+            Self::LeaveBlocksAllocatedSet => {
                 "The LeaveBlocksAllocated flag is set in a non-differencing disk. This \
                  flag is only valid in differencing disks; its presence in a standalone \
-                 image suggests post-creation cloning or deliberate image manipulation.",
-            Self::MissingParentLocator =>
+                 image suggests post-creation cloning or deliberate image manipulation."
+            }
+            Self::MissingParentLocator => {
                 "HasParent is true but no ParentLocator metadata item is present. The \
                  parent chain cannot be resolved, so data blocks that defer to the parent \
-                 are unreadable — the image is incomplete or the locator was stripped.",
-            Self::VirtualDiskSizeOverreported { .. } =>
+                 are unreadable — the image is incomplete or the locator was stripped."
+            }
+            Self::VirtualDiskSizeOverreported { .. } => {
                 "The declared VirtualDiskSize is larger than what the BAT can address. \
                  Reads at LBAs beyond the BAT coverage silently fail; the declared size \
-                 is larger than the actual addressable data surface.",
-            Self::BatSizeMetadataMismatch { .. } =>
+                 is larger than the actual addressable data surface."
+            }
+            Self::BatSizeMetadataMismatch { .. } => {
                 "The BAT region's physical size (CRC-protected) does not match the size \
                  implied by VirtualDiskSize and BlockSize (unprotected metadata). One \
-                 metadata field was silently modified after file creation.",
-            Self::BatEntryInStructuralRegion { .. } =>
+                 metadata field was silently modified after file creation."
+            }
+            Self::BatEntryInStructuralRegion { .. } => {
                 "A FULLY_PRESENT BAT entry's file offset falls inside a VHDX structural \
                  section (File Identifier, Header, Region Table, Metadata, or Log). \
-                 This redirects virtual disk reads into structural data — a data-aliasing attack.",
-            Self::MissingSectorBitmap { .. } =>
+                 This redirects virtual disk reads into structural data — a data-aliasing attack."
+            }
+            Self::MissingSectorBitmap { .. } => {
                 "A FULLY_PRESENT data block's corresponding sector bitmap slot is in \
                  NOT_PRESENT state. Hyper-V always writes the bitmap alongside data; \
-                 this combination indicates direct BAT manipulation after the write.",
-            Self::UndefinedBlockState { .. } =>
+                 this combination indicates direct BAT manipulation after the write."
+            }
+            Self::UndefinedBlockState { .. } => {
                 "A data BAT entry is in UNDEFINED state (1), which is only valid transiently \
                  during block allocation. Persistent UNDEFINED state indicates an interrupted \
-                 write or deliberate BAT manipulation to create unreadable blocks.",
-            Self::UnmappedBlockInNonDifferencing { .. } =>
+                 write or deliberate BAT manipulation to create unreadable blocks."
+            }
+            Self::UnmappedBlockInNonDifferencing { .. } => {
                 "A data BAT entry is in UNMAPPED state (3) in a non-differencing disk. \
                  UNMAPPED is only valid in differencing disks; its presence indicates \
-                 direct BAT manipulation outside the defined state machine.",
-            Self::GhostDataInAbsentBlock { .. } =>
+                 direct BAT manipulation outside the defined state machine."
+            }
+            Self::GhostDataInAbsentBlock { .. } => {
                 "A NOT_PRESENT BAT entry's ghost offset points to a file range containing \
                  non-zero bytes. Content was written to the block then the BAT entry was \
-                 zeroed without wiping the underlying storage — a data-hiding technique.",
-            Self::BatEntryBeyondContainer { .. } =>
+                 zeroed without wiping the underlying storage — a data-hiding technique."
+            }
+            Self::BatEntryBeyondContainer { .. } => {
                 "A FULLY_PRESENT BAT entry's file offset points outside the container. \
                  The declared data block does not exist in this file; reads will fail \
-                 or access attacker-controlled memory depending on the parser implementation.",
-            Self::BatEntryUnaligned { .. } =>
+                 or access attacker-controlled memory depending on the parser implementation."
+            }
+            Self::BatEntryUnaligned { .. } => {
                 "A FULLY_PRESENT BAT entry's file offset is not 1 MB aligned. The \
                  spec mandates MB alignment; a misaligned entry indicates manual patching \
-                 of the BAT to redirect a data block to a sub-MB granularity offset.",
-            Self::BatEntriesOverlap { .. } =>
+                 of the BAT to redirect a data block to a sub-MB granularity offset."
+            }
+            Self::BatEntriesOverlap { .. } => {
                 "Two FULLY_PRESENT BAT entries map different logical blocks to the same \
                  physical 1 MB region. The same bytes represent two different logical \
-                 blocks — a masquerading technique that makes LBA-to-physical mapping ambiguous.",
-            Self::PartiallyPresentBlock { .. } =>
+                 blocks — a masquerading technique that makes LBA-to-physical mapping ambiguous."
+            }
+            Self::PartiallyPresentBlock { .. } => {
                 "A data block BAT entry is in PARTIALLY_PRESENT transient state, which \
                  should never persist in a stable image. Persistence indicates an \
-                 interrupted block allocation or deliberate injection of a transient state.",
-            Self::SectorBitmapInvalidState { .. } =>
+                 interrupted block allocation or deliberate injection of a transient state."
+            }
+            Self::SectorBitmapInvalidState { .. } => {
                 "A sector bitmap BAT entry has an unexpected state value. The bitmap \
                  slot state must be NOT_PRESENT or FULLY_PRESENT; any other value \
-                 indicates direct BAT manipulation of the bitmap tracking structure.",
-            Self::TrailingData { .. } =>
+                 indicates direct BAT manipulation of the bitmap tracking structure."
+            }
+            Self::TrailingData { .. } => {
                 "Non-zero bytes exist between the end of the last BAT-addressed data block \
                  and the physical end of the file. This region is outside the BAT-mapped \
                  address space and invisible to virtual disk parsers — a steganographic \
-                 channel for concealing data after the nominal end of the disk image.",
-            Self::CreatorStringAnomalous { .. } =>
+                 channel for concealing data after the nominal end of the disk image."
+            }
+            Self::CreatorStringAnomalous { .. } => {
                 "The File Identifier creator string contains an anomaly inconsistent with \
                  legitimate VHDX tools. The creator string is not CRC-protected in older \
-                 format versions and is a low-visibility field for tool-fingerprint spoofing.",
-            Self::FileIdentifierReservedNonZero { .. } =>
+                 format versions and is a low-visibility field for tool-fingerprint spoofing."
+            }
+            Self::FileIdentifierReservedNonZero { .. } => {
                 "Non-zero bytes exist in the reserved area of the File Identifier section \
                  (bytes 512–65535, after the creator string). Normal parsers skip this \
                  area entirely — it is a low-visibility location for data hiding or \
-                 steganographic payloads that survive most forensic sanitization tools.",
-            Self::InterRegionGapNonZero { .. } =>
+                 steganographic payloads that survive most forensic sanitization tools."
+            }
+            Self::InterRegionGapNonZero { .. } => {
                 "Non-zero bytes exist in a padding gap between two adjacent structural \
                  regions. Hyper-V zeros these gaps at creation; non-zero content indicates \
-                 data hiding or a partial-write artifact from an abnormal shutdown.",
-            Self::HeaderReservedNonZero { .. } =>
+                 data hiding or a partial-write artifact from an abnormal shutdown."
+            }
+            Self::HeaderReservedNonZero { .. } => {
                 "Non-zero bytes exist in the reserved portion of a valid header copy. \
                  These bytes are CRC-protected but not semantically defined — an attacker \
                  can write arbitrary data there and update the CRC to produce a structurally \
-                 valid header that carries hidden content undetected by integrity checkers.",
+                 valid header that carries hidden content undetected by integrity checkers."
+            }
         }
     }
 
@@ -828,17 +915,14 @@ impl VhdxIntegrityAnomaly {
     /// (e.g. pure structural corruption that has no deception intent).
     pub fn mitre_techniques(&self) -> &'static [&'static str] {
         match self {
-            Self::TrailingData { .. } | Self::GhostDataInAbsentBlock { .. } =>
-                &["T1564.001"],
+            Self::TrailingData { .. } | Self::GhostDataInAbsentBlock { .. } => &["T1564.001"],
             Self::FileIdentifierReservedNonZero { .. }
             | Self::HeaderReservedNonZero { .. }
-            | Self::BatEntryInStructuralRegion { .. } =>
-                &["T1027"],
+            | Self::BatEntryInStructuralRegion { .. } => &["T1027"],
             Self::LogSequenceNumberGap { .. }
             | Self::FileWriteGuidAllZeros
             | Self::DataWriteGuidAllZeros
-            | Self::LogZeroedButDirty { .. } =>
-                &["T1070"],
+            | Self::LogZeroedButDirty { .. } => &["T1070"],
             Self::LogEntryGuidMismatch { .. } => &["T1070.003"],
             Self::BatEntriesOverlap { .. } => &["T1036"],
             Self::VirtualDiskSizeUnderreported { .. } => &["T1564"],
@@ -1011,10 +1095,8 @@ impl<'a> VhdxIntegrity<'a> {
             if ok && self.data.len() >= off + HEADER_SIZE {
                 let header_reserved = &self.data[off + 80..off + HEADER_SIZE];
                 if header_reserved.iter().any(|&b| b != 0) {
-                    let first_nonzero = header_reserved
-                        .iter()
-                        .position(|&b| b != 0)
-                        .unwrap_or(0) as u16;
+                    let first_nonzero =
+                        header_reserved.iter().position(|&b| b != 0).unwrap_or(0) as u16;
                     let length = header_reserved.iter().filter(|&&b| b != 0).count() as u16;
                     issues.push(VhdxIntegrityAnomaly::HeaderReservedNonZero {
                         copy,
@@ -1048,7 +1130,9 @@ impl<'a> VhdxIntegrity<'a> {
             // 2B: Version fields.
             let log_version = r16(active, 64);
             if log_version != 1 {
-                issues.push(VhdxIntegrityAnomaly::LogVersionInvalid { version: log_version });
+                issues.push(VhdxIntegrityAnomaly::LogVersionInvalid {
+                    version: log_version,
+                });
             }
             let version = r16(active, 66);
             if version != 1 {
@@ -1073,7 +1157,10 @@ impl<'a> VhdxIntegrity<'a> {
                 if log_offset < 0x0010_0000 {
                     issues.push(VhdxIntegrityAnomaly::LogInReservedZone { log_offset });
                 }
-                issues.push(VhdxIntegrityAnomaly::DirtyLog { log_length, log_offset });
+                issues.push(VhdxIntegrityAnomaly::DirtyLog {
+                    log_length,
+                    log_offset,
+                });
             }
         }
 
@@ -1106,10 +1193,10 @@ impl<'a> VhdxIntegrity<'a> {
 
     /// Check the File Identifier reserved area (bytes 512–65535) for non-zero content.
     pub fn check_file_identifier_reserved(&self) -> Vec<VhdxIntegrityAnomaly> {
-        let mut issues = Vec::new();
         // File Identifier section is bytes 0..0x100000; reserved area is 512..65536.
         const RESERVED_START: usize = 512;
         const RESERVED_END: usize = 65536;
+        let mut issues = Vec::new();
         if self.data.len() < RESERVED_END {
             return issues;
         }
@@ -1117,8 +1204,7 @@ impl<'a> VhdxIntegrity<'a> {
         let first_nonzero = reserved.iter().position(|&b| b != 0);
         if let Some(pos) = first_nonzero {
             let start_offset = (RESERVED_START + pos) as u64;
-            let nonzero_count =
-                reserved[pos..].iter().filter(|&&b| b != 0).count() as u64;
+            let nonzero_count = reserved[pos..].iter().filter(|&&b| b != 0).count() as u64;
             issues.push(VhdxIntegrityAnomaly::FileIdentifierReservedNonZero {
                 start_offset,
                 nonzero_count,
@@ -1145,9 +1231,14 @@ impl<'a> VhdxIntegrity<'a> {
         let rt1 = REGION_TABLE1_OFFSET as usize;
         let rt2 = REGION_TABLE2_OFFSET as usize;
         let fixed_gaps: &[(&'static str, &'static str, usize, usize)] = &[
-            ("Header1",      "Header2",      h1 + HEADER_SIZE, h2),
-            ("Header2",      "RegionTable1", h2 + HEADER_SIZE, rt1),
-            ("RegionTable2", "DataArea",     rt2 + REGION_TABLE_CRC_COVERAGE, 0x0010_0000),
+            ("Header1", "Header2", h1 + HEADER_SIZE, h2),
+            ("Header2", "RegionTable1", h2 + HEADER_SIZE, rt1),
+            (
+                "RegionTable2",
+                "DataArea",
+                rt2 + REGION_TABLE_CRC_COVERAGE,
+                0x0010_0000,
+            ),
         ];
         for &(from, to, gap_start, gap_end) in fixed_gaps {
             if self.data.len() < gap_end {
@@ -1261,7 +1352,10 @@ impl<'a> VhdxIntegrity<'a> {
         let mut issues = Vec::new();
 
         // Use the first CRC-valid RT copy for entry scanning.
-        let rt_info = [(REGION_TABLE1_OFFSET as usize, 1u8), (REGION_TABLE2_OFFSET as usize, 2u8)];
+        let rt_info = [
+            (REGION_TABLE1_OFFSET as usize, 1u8),
+            (REGION_TABLE2_OFFSET as usize, 2u8),
+        ];
         let (rt_off, copy) = match rt_info
             .iter()
             .find(|&&(_, c)| self.check_single_rt_crc(c).is_none())
@@ -1282,8 +1376,7 @@ impl<'a> VhdxIntegrity<'a> {
             });
         }
 
-        let entry_count =
-            (r32(rt, 8) as usize).min(2048);
+        let entry_count = (r32(rt, 8) as usize).min(2048);
         if entry_count == 0 {
             issues.push(VhdxIntegrityAnomaly::RegionEntryCountZero { copy });
             return issues;
@@ -1297,11 +1390,9 @@ impl<'a> VhdxIntegrity<'a> {
             }
             let mut guid = [0u8; 16];
             guid.copy_from_slice(&rt[base..base + 16]);
-            let file_offset =
-                r64(rt, base + 16);
+            let file_offset = r64(rt, base + 16);
             let length = r32(rt, base + 24);
-            let required_field =
-                r32(rt, base + 28);
+            let required_field = r32(rt, base + 28);
 
             // 3D: Reserved bits 1–31 of the Required word.
             let reserved_bits = required_field & !1u32;
@@ -1320,8 +1411,11 @@ impl<'a> VhdxIntegrity<'a> {
             } else {
                 // 3C: Unknown required region.
                 if required_field & 1 != 0 {
-                    let guid_hex: String =
-                        guid.iter().map(|b| format!("{b:02x}")).collect();
+                    use std::fmt::Write as _;
+                    let guid_hex: String = guid.iter().fold(String::new(), |mut acc, b| {
+                        let _ = write!(acc, "{b:02x}");
+                        acc
+                    });
                     issues.push(VhdxIntegrityAnomaly::UnknownRequiredRegion { guid_hex });
                 }
                 continue;
@@ -1373,10 +1467,10 @@ impl<'a> VhdxIntegrity<'a> {
                 let log_end = log_offset.saturating_add(u64::from(log_length));
                 let structural: &[(&'static str, u64, u64)] = &[
                     ("FileIdentifier", 0x0000_0000, 0x0001_0000),
-                    ("Header1",        0x0001_0000, 0x0002_0000),
-                    ("Header2",        0x0002_0000, 0x0003_0000),
-                    ("RegionTable1",   0x0003_0000, 0x0004_0000),
-                    ("RegionTable2",   0x0004_0000, Self::LOG_RESERVED_ZONE_END),
+                    ("Header1", 0x0001_0000, 0x0002_0000),
+                    ("Header2", 0x0002_0000, 0x0003_0000),
+                    ("RegionTable1", 0x0003_0000, 0x0004_0000),
+                    ("RegionTable2", 0x0004_0000, Self::LOG_RESERVED_ZONE_END),
                 ];
                 for &(name, s_start, s_end) in structural {
                     if log_offset.max(s_start) < log_end.min(s_end) {
@@ -1496,8 +1590,7 @@ impl<'a> VhdxIntegrity<'a> {
         if crc32c(&buf) != stored {
             return None;
         }
-        let entry_count =
-            (r32(rt, 8) as usize).min(2048);
+        let entry_count = (r32(rt, 8) as usize).min(2048);
         let mut bat: Option<(u64, u32)> = None;
         let mut meta: Option<(u64, u32)> = None;
         for i in 0..entry_count {
@@ -1533,8 +1626,7 @@ impl<'a> VhdxIntegrity<'a> {
         if self.data.len() >= meta_table_end && meta_length >= 8 {
             let region = &self.data[meta_start..meta_table_end];
             if &region[..8] == METADATA_TABLE_SIGNATURE {
-                let count =
-                    r16(region, 10) as usize;
+                let count = r16(region, 10) as usize;
                 for i in 0..count.min(256) {
                     let base = 32usize.checked_add(i.checked_mul(32)?)?;
                     if base + 32 > region.len() {
@@ -1550,21 +1642,15 @@ impl<'a> VhdxIntegrity<'a> {
                         let flags = r32(self.data, data_start + 4);
                         leave_alloc = flags & 1 != 0;
                         has_parent = flags & 2 != 0;
-                    } else if guid == GUID_VIRTUAL_DISK_SIZE
-                        && self.data.len() >= data_start + 8
-                    {
+                    } else if guid == GUID_VIRTUAL_DISK_SIZE && self.data.len() >= data_start + 8 {
                         vdisk_size = Some(r64(self.data, data_start));
-                    } else if guid == GUID_LOGICAL_SECTOR_SIZE
-                        && self.data.len() >= data_start + 4
+                    } else if guid == GUID_LOGICAL_SECTOR_SIZE && self.data.len() >= data_start + 4
                     {
                         logical_ss = Some(r32(self.data, data_start));
-                    } else if guid == GUID_PHYSICAL_SECTOR_SIZE
-                        && self.data.len() >= data_start + 4
+                    } else if guid == GUID_PHYSICAL_SECTOR_SIZE && self.data.len() >= data_start + 4
                     {
                         physical_ss = Some(r32(self.data, data_start));
-                    } else if guid == GUID_VIRTUAL_DISK_ID
-                        && self.data.len() >= data_start + 16
-                    {
+                    } else if guid == GUID_VIRTUAL_DISK_ID && self.data.len() >= data_start + 16 {
                         let mut id = [0u8; 16];
                         id.copy_from_slice(&self.data[data_start..data_start + 16]);
                         vdisk_id = Some(id);
@@ -1602,10 +1688,7 @@ impl<'a> VhdxIntegrity<'a> {
 
     // ── Private: layer check implementations ─────────────────────────────────
 
-    fn check_metadata_inner(
-        &self,
-        regions: Option<&ParsedRegions>,
-    ) -> Vec<VhdxIntegrityAnomaly> {
+    fn check_metadata_inner(&self, regions: Option<&ParsedRegions>) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
         let r = match regions {
             Some(r) => r,
@@ -1643,8 +1726,7 @@ impl<'a> VhdxIntegrity<'a> {
             // Item offsets in table entries are from the start of the metadata region (§3.3.2).
             let region_size = r.meta_length as usize;
             if &region[..8] == METADATA_TABLE_SIGNATURE {
-                let count =
-                    r16(region, 10) as usize;
+                let count = r16(region, 10) as usize;
                 let mut item_ranges: Vec<(u32, u32)> = Vec::new(); // (item_offset, item_end)
 
                 for i in 0..count.min(2048) {
@@ -1737,7 +1819,10 @@ impl<'a> VhdxIntegrity<'a> {
     }
 
     fn check_bat_inner(&self, regions: Option<&ParsedRegions>) -> Vec<VhdxIntegrityAnomaly> {
-        let r = match regions { Some(r) => r, None => return vec![] };
+        let r = match regions {
+            Some(r) => r,
+            None => return vec![],
+        };
         let bat_len = r.bat_length as usize;
         let bat_end = (r.bat_offset as usize).saturating_add(bat_len);
         if self.data.len() < bat_end || bat_len < 8 {
@@ -1746,7 +1831,7 @@ impl<'a> VhdxIntegrity<'a> {
         let entry_count = bat_len / 8;
         let container_size = self.data.len() as u64;
 
-        let mut issues = self.bat_check_size_formula(r, entry_count);
+        let mut issues = Self::bat_check_size_formula(r, entry_count);
         let (entry_issues, present) = self.bat_scan_entries(r, entry_count, container_size);
         issues.extend(entry_issues);
         issues.extend(Self::bat_check_coverage(r, &present, entry_count));
@@ -1754,14 +1839,13 @@ impl<'a> VhdxIntegrity<'a> {
     }
 
     /// 5A — verify BAT physical size matches what VirtualDiskSize + BlockSize imply.
-    fn bat_check_size_formula(
-        &self,
-        r: &ParsedRegions,
-        entry_count: usize,
-    ) -> Vec<VhdxIntegrityAnomaly> {
-        let (Some(bs), Some(vds), Some(cr)) = (r.block_size, r.vdisk_size, r.chunk_ratio)
-        else { return vec![] };
-        if bs == 0 { return vec![]; }
+    fn bat_check_size_formula(r: &ParsedRegions, entry_count: usize) -> Vec<VhdxIntegrityAnomaly> {
+        let (Some(bs), Some(vds), Some(cr)) = (r.block_size, r.vdisk_size, r.chunk_ratio) else {
+            return vec![];
+        };
+        if bs == 0 {
+            return vec![];
+        }
         let data_blocks = vds.div_ceil(u64::from(bs)) as usize;
         let bat_entries_expected = data_blocks + data_blocks.div_ceil(cr as usize);
         let expected_bat_bytes = ((bat_entries_expected as u64 * 8).next_multiple_of(MB)) as u32;
@@ -1793,25 +1877,47 @@ impl<'a> VhdxIntegrity<'a> {
         let log_zone: Option<(u64, u64)> = self.active_header_block().and_then(|h| {
             let ll = r32(h, 68);
             let lo = r64(h, 72);
-            if ll > 0 { Some((lo, lo.saturating_add(u64::from(ll)))) } else { None }
+            if ll > 0 {
+                Some((lo, lo.saturating_add(u64::from(ll))))
+            } else {
+                None
+            }
         });
         let meta_end = r.meta_offset.saturating_add(u64::from(r.meta_length));
 
         // Returns the structural zone name for a given file offset, or None.
         let structural_zone = |fo: u64| -> Option<&'static str> {
-            if fo < 0x0001_0000 { return Some("FileIdentifier"); }
-            if fo < 0x0002_0000 { return Some("Header1"); }
-            if fo < 0x0003_0000 { return Some("Header2"); }
-            if fo < 0x0004_0000 { return Some("RegionTable1"); }
-            if fo < 0x0005_0000 { return Some("RegionTable2"); }
-            if fo >= r.meta_offset && fo < meta_end { return Some("Metadata"); }
-            if let Some((lo, le)) = log_zone { if fo >= lo && fo < le { return Some("Log"); } }
+            if fo < 0x0001_0000 {
+                return Some("FileIdentifier");
+            }
+            if fo < 0x0002_0000 {
+                return Some("Header1");
+            }
+            if fo < 0x0003_0000 {
+                return Some("Header2");
+            }
+            if fo < 0x0004_0000 {
+                return Some("RegionTable1");
+            }
+            if fo < 0x0005_0000 {
+                return Some("RegionTable2");
+            }
+            if fo >= r.meta_offset && fo < meta_end {
+                return Some("Metadata");
+            }
+            if let Some((lo, le)) = log_zone {
+                if fo >= lo && fo < le {
+                    return Some("Log");
+                }
+            }
             None
         };
 
         for i in 0..entry_count {
             let ep = bat_entry_pos(r.bat_offset, i);
-            if ep + 8 > self.data.len() { break; }
+            if ep + 8 > self.data.len() {
+                break;
+            }
             let raw = r64(self.data, ep);
             let state = (raw & 0b111) as u8;
 
@@ -1819,7 +1925,10 @@ impl<'a> VhdxIntegrity<'a> {
             let is_bitmap_slot = r.chunk_ratio.is_some_and(|cr| (i as u64 % (cr + 1)) == cr);
             if is_bitmap_slot {
                 if state != SB_BLOCK_NOT_PRESENT && state != SB_BLOCK_PRESENT {
-                    issues.push(VhdxIntegrityAnomaly::SectorBitmapInvalidState { bat_index: i, state });
+                    issues.push(VhdxIntegrityAnomaly::SectorBitmapInvalidState {
+                        bat_index: i,
+                        state,
+                    });
                 }
                 continue;
             }
@@ -1831,26 +1940,37 @@ impl<'a> VhdxIntegrity<'a> {
                 }
                 1 => issues.push(VhdxIntegrityAnomaly::UndefinedBlockState { bat_index: i }),
                 3 if !r.has_parent => {
-                    issues.push(VhdxIntegrityAnomaly::UnmappedBlockInNonDifferencing { bat_index: i });
+                    issues.push(VhdxIntegrityAnomaly::UnmappedBlockInNonDifferencing {
+                        bat_index: i,
+                    });
                 }
                 _ => {}
             }
-            if state != PAYLOAD_BLOCK_FULLY_PRESENT { continue; }
+            if state != PAYLOAD_BLOCK_FULLY_PRESENT {
+                continue;
+            }
 
-            let offset_mb  = raw >> 20;
+            let offset_mb = raw >> 20;
             let file_offset = offset_mb * MB;
 
             if raw & BAT_RESERVED_BITS_MASK != 0 {
-                issues.push(VhdxIntegrityAnomaly::BatEntryUnaligned { bat_index: i, file_offset });
+                issues.push(VhdxIntegrityAnomaly::BatEntryUnaligned {
+                    bat_index: i,
+                    file_offset,
+                });
             }
             if let Some(zone) = structural_zone(file_offset) {
                 issues.push(VhdxIntegrityAnomaly::BatEntryInStructuralRegion {
-                    bat_index: i, file_offset, collides_with: zone,
+                    bat_index: i,
+                    file_offset,
+                    collides_with: zone,
                 });
             }
             if file_offset >= container_size {
                 issues.push(VhdxIntegrityAnomaly::BatEntryBeyondContainer {
-                    bat_index: i, file_offset, container_size,
+                    bat_index: i,
+                    file_offset,
+                    container_size,
                 });
                 continue;
             }
@@ -1865,7 +1985,8 @@ impl<'a> VhdxIntegrity<'a> {
                         && (r64(self.data, bep) & 0b111) as u8 == SB_BLOCK_NOT_PRESENT
                     {
                         issues.push(VhdxIntegrityAnomaly::MissingSectorBitmap {
-                            data_bat_index: i, bitmap_bat_index: bitmap_idx,
+                            data_bat_index: i,
+                            bitmap_bat_index: bitmap_idx,
                         });
                     }
                 }
@@ -1879,7 +2000,9 @@ impl<'a> VhdxIntegrity<'a> {
         for w in present.windows(2) {
             if w[0].0 == w[1].0 {
                 issues.push(VhdxIntegrityAnomaly::BatEntriesOverlap {
-                    index_a: w[0].1, index_b: w[1].1, shared_offset: w[0].0 * MB,
+                    index_a: w[0].1,
+                    index_b: w[1].1,
+                    shared_offset: w[0].0 * MB,
                 });
             }
         }
@@ -1896,15 +2019,20 @@ impl<'a> VhdxIntegrity<'a> {
         entry_count: usize,
     ) -> Vec<VhdxIntegrityAnomaly> {
         let mut issues = Vec::new();
-        let (Some(bs), Some(declared_vds)) = (r.block_size, r.vdisk_size) else { return issues };
-        if bs == 0 { return issues; }
+        let (Some(bs), Some(declared_vds)) = (r.block_size, r.vdisk_size) else {
+            return issues;
+        };
+        if bs == 0 {
+            return issues;
+        }
 
         if !present.is_empty() {
             let max_mb = present.iter().map(|&(off, _)| off).max().unwrap_or(0);
             let bat_coverage = (max_mb + 1) * MB;
             if bat_coverage > declared_vds {
                 issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeUnderreported {
-                    declared: declared_vds, bat_coverage,
+                    declared: declared_vds,
+                    bat_coverage,
                 });
             }
         }
@@ -1914,7 +2042,8 @@ impl<'a> VhdxIntegrity<'a> {
             let bat_coverage = max_data_blocks * u64::from(bs);
             if declared_vds > bat_coverage {
                 issues.push(VhdxIntegrityAnomaly::VirtualDiskSizeOverreported {
-                    declared: declared_vds, bat_coverage,
+                    declared: declared_vds,
+                    bat_coverage,
                 });
             }
         }
@@ -2160,10 +2289,8 @@ impl<'a> VhdxIntegrity<'a> {
         let h2_ok = self.check_single_header_crc(2).is_none();
         match (h1_ok, h2_ok) {
             (true, true) => {
-                let seq1 =
-                    r64(self.data, h1_off + 8);
-                let seq2 =
-                    r64(self.data, h2_off + 8);
+                let seq1 = r64(self.data, h1_off + 8);
+                let seq2 = r64(self.data, h2_off + 8);
                 if seq1 >= seq2 {
                     Some(&self.data[h1_off..h1_off + HEADER_SIZE])
                 } else {
@@ -2176,7 +2303,6 @@ impl<'a> VhdxIntegrity<'a> {
         }
     }
 }
-
 
 impl VhdxIntegrityAnomaly {
     /// Stable, scheme-prefixed machine code for this anomaly.
@@ -2234,7 +2360,9 @@ impl VhdxIntegrityAnomaly {
             Self::BatEntryInStructuralRegion { .. } => "VHDX-BAT-ENTRY-IN-STRUCTURAL-REGION",
             Self::MissingSectorBitmap { .. } => "VHDX-MISSING-SECTOR-BITMAP",
             Self::UndefinedBlockState { .. } => "VHDX-UNDEFINED-BLOCK-STATE",
-            Self::UnmappedBlockInNonDifferencing { .. } => "VHDX-UNMAPPED-BLOCK-IN-NON-DIFFERENCING",
+            Self::UnmappedBlockInNonDifferencing { .. } => {
+                "VHDX-UNMAPPED-BLOCK-IN-NON-DIFFERENCING"
+            }
             Self::GhostDataInAbsentBlock { .. } => "VHDX-GHOST-DATA-IN-ABSENT-BLOCK",
             Self::BatEntryBeyondContainer { .. } => "VHDX-BAT-ENTRY-BEYOND-CONTAINER",
             Self::BatEntryUnaligned { .. } => "VHDX-BAT-ENTRY-UNALIGNED",

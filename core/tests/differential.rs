@@ -22,7 +22,8 @@ fn fat_differential_sector_0_readable() {
     let mut diff = VhdxReader::from_bytes_with_parent(data("fat-differential.vhdx"), parent)
         .expect("differential opens");
     let mut buf = [0u8; 512];
-    diff.read_exact(&mut buf).expect("sector 0 must be readable");
+    diff.read_exact(&mut buf)
+        .expect("sector 0 must be readable");
 }
 
 #[test]

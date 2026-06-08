@@ -1,5 +1,5 @@
-use crate::error::{Result, VhdxError};
 use crate::bytes::{le_arr16, le_u32, le_u64};
+use crate::error::{Result, VhdxError};
 
 /// Offsets per MS-VHDX spec §2.1 — each block occupies a 64 KB slot within
 /// the first 1 MB of the file (the "header section").

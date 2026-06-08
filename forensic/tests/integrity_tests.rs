@@ -449,7 +449,9 @@ fn log_guid_all_zeros_with_dirty_log_detected() {
     assert!(
         issues.iter().any(|a| matches!(
             a,
-            VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog { log_length: 0x0010_0000 }
+            VhdxIntegrityAnomaly::LogGuidAllZerosWithDirtyLog {
+                log_length: 0x0010_0000
+            }
         )),
         "expected LogGuidAllZerosWithDirtyLog, got: {issues:#?}"
     );
@@ -465,10 +467,9 @@ fn log_version_invalid_detected() {
     recompute_header_crc(&mut image, H1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::LogVersionInvalid { version: 2 }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogVersionInvalid { version: 2 })),
         "expected LogVersionInvalid(version=2), got: {issues:#?}"
     );
 }
@@ -483,10 +484,9 @@ fn version_invalid_detected() {
     recompute_header_crc(&mut image, H1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::VersionInvalid { version: 2 }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::VersionInvalid { version: 2 })),
         "expected VersionInvalid(version=2), got: {issues:#?}"
     );
 }
@@ -504,7 +504,9 @@ fn log_offset_misaligned_detected() {
     assert!(
         issues.iter().any(|a| matches!(
             a,
-            VhdxIntegrityAnomaly::LogOffsetMisaligned { log_offset: 0x0030_0001 }
+            VhdxIntegrityAnomaly::LogOffsetMisaligned {
+                log_offset: 0x0030_0001
+            }
         )),
         "expected LogOffsetMisaligned, got: {issues:#?}"
     );
@@ -542,10 +544,9 @@ fn log_beyond_container_detected() {
     recompute_header_crc(&mut image, H1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::LogBeyondContainer { .. }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogBeyondContainer { .. })),
         "expected LogBeyondContainer, got: {issues:#?}"
     );
 }
@@ -562,10 +563,9 @@ fn log_in_reserved_zone_detected() {
     recompute_header_crc(&mut image, H1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::LogInReservedZone { log_offset: 0 }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogInReservedZone { log_offset: 0 })),
         "expected LogInReservedZone, got: {issues:#?}"
     );
 }
@@ -608,7 +608,10 @@ fn phase2_severity_levels_correct() {
             },
             Medium,
         ),
-        (VhdxIntegrityAnomaly::LogVersionInvalid { version: 0 }, Medium),
+        (
+            VhdxIntegrityAnomaly::LogVersionInvalid { version: 0 },
+            Medium,
+        ),
         (VhdxIntegrityAnomaly::VersionInvalid { version: 2 }, Medium),
         (
             VhdxIntegrityAnomaly::LogOffsetMisaligned { log_offset: 1 },
@@ -870,10 +873,9 @@ fn log_zeroed_but_dirty_detected() {
     setup_dirty_log(&mut image);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::LogZeroedButDirty { .. }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogZeroedButDirty { .. })),
         "expected LogZeroedButDirty, got: {issues:#?}"
     );
 }
@@ -888,10 +890,9 @@ fn log_entry_signature_missing_detected() {
     image[LOG_OFFSET as usize..LOG_OFFSET as usize + 4].copy_from_slice(b"XXXX");
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::LogEntrySignatureMissing { .. }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogEntrySignatureMissing { .. })),
         "expected LogEntrySignatureMissing, got: {issues:#?}"
     );
 }
@@ -910,10 +911,9 @@ fn log_entry_crc_mismatch_detected() {
     image[at + 32..at + 48].copy_from_slice(&LOG_GUID);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::LogEntryCrcMismatch { .. }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogEntryCrcMismatch { .. })),
         "expected LogEntryCrcMismatch, got: {issues:#?}"
     );
 }
@@ -929,10 +929,9 @@ fn log_entry_guid_mismatch_detected() {
     write_log_entry(&mut image, LOG_OFFSET as usize, wrong_guid, 1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::LogEntryGuidMismatch { .. }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogEntryGuidMismatch { .. })),
         "expected LogEntryGuidMismatch, got: {issues:#?}"
     );
 }
@@ -1086,10 +1085,9 @@ fn log_overlaps_structural_region_detected() {
     recompute_header_crc(&mut image, H1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::LogOverlapsStructuralRegion { .. }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::LogOverlapsStructuralRegion { .. })),
         "expected LogOverlapsStructuralRegion, got: {issues:#?}"
     );
 }
@@ -1101,7 +1099,7 @@ fn unknown_required_region_detected() {
     let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
     // Increment RT1 entry count to 3, add entry 2 with unknown GUID + Required=1.
     image[RT1 + 8..RT1 + 12].copy_from_slice(&3u32.to_le_bytes()); // EntryCount=3
-    // Unknown GUID at entry 2 (base = 16 + 2*32 = 80).
+                                                                   // Unknown GUID at entry 2 (base = 16 + 2*32 = 80).
     image[RT1 + 80..RT1 + 96].fill(0xDE); // all 0xDE — not BAT or Metadata GUID
     image[RT1 + 96..RT1 + 104].copy_from_slice(&0x0050_0000u64.to_le_bytes()); // file_offset
     image[RT1 + 104..RT1 + 108].copy_from_slice(&0x0010_0000u32.to_le_bytes()); // length
@@ -1109,10 +1107,9 @@ fn unknown_required_region_detected() {
     recompute_rt_crc(&mut image, RT1);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(
-            a,
-            VhdxIntegrityAnomaly::UnknownRequiredRegion { .. }
-        )),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::UnknownRequiredRegion { .. })),
         "expected UnknownRequiredRegion, got: {issues:#?}"
     );
 }
@@ -1258,13 +1255,13 @@ fn physical_sector_size_invalid_detected() {
     let e3 = META_BASE + 128;
     // GUID_PHYSICAL_SECTOR_SIZE = {CDA348C7-445D-4471-9CC9-E9885251C556}
     let guid_pss: [u8; 16] = [
-        0xC7, 0x48, 0xA3, 0xCD, 0x5D, 0x44, 0x71, 0x44,
-        0x9C, 0xC9, 0xE9, 0x88, 0x52, 0x51, 0xC5, 0x56,
+        0xC7, 0x48, 0xA3, 0xCD, 0x5D, 0x44, 0x71, 0x44, 0x9C, 0xC9, 0xE9, 0x88, 0x52, 0x51, 0xC5,
+        0x56,
     ];
     image[e3..e3 + 16].copy_from_slice(&guid_pss);
-    image[e3 + 16..e3 + 20].copy_from_slice(&0x1001_4u32.to_le_bytes()); // item_offset from region start
-    image[e3 + 20..e3 + 24].copy_from_slice(&4u32.to_le_bytes());  // item_len=4
-    // flags and reserved stay zero
+    image[e3 + 16..e3 + 20].copy_from_slice(&0x0001_0014_u32.to_le_bytes()); // item_offset from region start
+    image[e3 + 20..e3 + 24].copy_from_slice(&4u32.to_le_bytes()); // item_len=4
+                                                                  // flags and reserved stay zero
 
     // Write invalid PhysicalSectorSize value 1024 at items_base + 20.
     image[ITEMS_BASE + 20..ITEMS_BASE + 24].copy_from_slice(&1024u32.to_le_bytes());
@@ -1289,13 +1286,13 @@ fn virtual_disk_id_all_zeros_detected() {
     let e3 = META_BASE + 128;
     // GUID_VIRTUAL_DISK_ID = {BECA12AB-B2E6-4523-93EF-C309E000C746}
     let guid_vdi: [u8; 16] = [
-        0xAB, 0x12, 0xCA, 0xBE, 0xE6, 0xB2, 0x23, 0x45,
-        0x93, 0xEF, 0xC3, 0x09, 0xE0, 0x00, 0xC7, 0x46,
+        0xAB, 0x12, 0xCA, 0xBE, 0xE6, 0xB2, 0x23, 0x45, 0x93, 0xEF, 0xC3, 0x09, 0xE0, 0x00, 0xC7,
+        0x46,
     ];
     image[e3..e3 + 16].copy_from_slice(&guid_vdi);
-    image[e3 + 16..e3 + 20].copy_from_slice(&0x1001_4u32.to_le_bytes()); // item_offset from region start
+    image[e3 + 16..e3 + 20].copy_from_slice(&0x0001_0014_u32.to_le_bytes()); // item_offset from region start
     image[e3 + 20..e3 + 24].copy_from_slice(&16u32.to_le_bytes()); // item_len=16
-    // 16 bytes at items_base+20 are already zero — VirtualDiskId = [0u8;16]
+                                                                   // 16 bytes at items_base+20 are already zero — VirtualDiskId = [0u8;16]
 
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
@@ -1315,7 +1312,7 @@ fn metadata_items_overlap_detected() {
     // Patch Entry 1 (VirtualDiskSize) item_offset from 0x10008 to 0x10004.
     // Entry 0 item: [0x10000..0x10008]; Entry 1 item: [0x10004..0x1000C] → overlap at [0x10004..0x10008].
     // Entry 1 Offset field is at table[80..84] = META_BASE + 80.
-    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&0x1000_4u32.to_le_bytes());
+    image[META_BASE + 80..META_BASE + 84].copy_from_slice(&0x0001_0004_u32.to_le_bytes());
 
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
@@ -1409,7 +1406,10 @@ fn virtual_disk_size_overreported_detected() {
 fn phase6_severity_levels_correct() {
     use Severity::*;
     let checks: &[(VhdxIntegrityAnomaly, Severity)] = &[
-        (VhdxIntegrityAnomaly::PhysicalSectorSizeInvalid { sector_size: 1024 }, Medium),
+        (
+            VhdxIntegrityAnomaly::PhysicalSectorSizeInvalid { sector_size: 1024 },
+            Medium,
+        ),
         (VhdxIntegrityAnomaly::VirtualDiskIdAllZeros, Medium),
         (
             VhdxIntegrityAnomaly::MetadataItemsOverlap {
@@ -1462,9 +1462,10 @@ fn file_identifier_reserved_nonzero_detected() {
     image[512] = 0xFF;
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues
-            .iter()
-            .any(|a| matches!(a, VhdxIntegrityAnomaly::FileIdentifierReservedNonZero { .. })),
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::FileIdentifierReservedNonZero { .. }
+        )),
         "expected FileIdentifierReservedNonZero, got: {issues:#?}"
     );
 }
@@ -1525,7 +1526,7 @@ fn phase7_severity_levels_correct() {
             VhdxIntegrityAnomaly::InterRegionGapNonZero {
                 from_region: "Header1",
                 to_region: "Header2",
-                gap_offset: 0x101000,
+                gap_offset: 0x0010_1000,
                 gap_size: 1,
             },
             Info,
@@ -1632,8 +1633,8 @@ fn analyse_does_not_panic_on_extreme_bat_region_offset() {
 // (exercises the min(2048) cap and bounds-check in the metadata table loop).
 #[test]
 fn analyse_does_not_panic_on_huge_metadata_entry_count() {
-    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
     const META_BASE: usize = 0x0030_0000;
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
     // Metadata table entry_count is at META_BASE + 10..12 (u16 LE).
     image[META_BASE + 10..META_BASE + 12].copy_from_slice(&0xFFFFu16.to_le_bytes());
     // No panic is the only requirement.
@@ -1654,8 +1655,8 @@ fn analyse_does_not_panic_when_block_size_is_zero() {
 // (exercises the checked_add chain that returns None → item skipped).
 #[test]
 fn analyse_does_not_panic_on_extreme_metadata_item_offset() {
-    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
     const META_BASE: usize = 0x0030_0000;
+    let mut image = builder::VhdxBuilder::new(4 * 1024 * 1024).build();
     // Entry 0 item_offset field is at META_BASE + 48 (32 table header + 16 GUID).
     image[META_BASE + 48..META_BASE + 52].copy_from_slice(&u32::MAX.to_le_bytes());
     let _ = VhdxIntegrity::new(&image).analyse();

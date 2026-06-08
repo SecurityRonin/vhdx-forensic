@@ -1,5 +1,5 @@
-use crate::error::{Result, VhdxError};
 use crate::bytes::le_u64;
+use crate::error::{Result, VhdxError};
 use crate::metadata::VhdxMetadata;
 
 const PAYLOAD_BLOCK_NOT_PRESENT: u64 = 0;

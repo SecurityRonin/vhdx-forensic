@@ -16,7 +16,7 @@ fn anomalies_at_least_filters_correctly() {
             log_length: 0x10_0000,
             log_offset: 0x40_0000,
         }, // Info
-        VhdxIntegrityAnomaly::FileWriteGuidAllZeros, // Warning
+        VhdxIntegrityAnomaly::FileWriteGuidAllZeros,        // Warning
         VhdxIntegrityAnomaly::HeaderChecksumMismatch {
             copy: 1,
             computed: 0,
@@ -58,7 +58,7 @@ fn summary_counts_match_input() {
             computed: 0,
             stored: 1,
         }, // Error
-        VhdxIntegrityAnomaly::FileWriteGuidAllZeros, // Warning
+        VhdxIntegrityAnomaly::FileWriteGuidAllZeros,        // Warning
         VhdxIntegrityAnomaly::DirtyLog {
             log_length: 0x10_0000,
             log_offset: 0x40_0000,
@@ -90,7 +90,10 @@ fn summary_empty_returns_zeros_and_none() {
 fn forensic_significance_is_non_empty_for_selected_variants() {
     let cases: &[VhdxIntegrityAnomaly] = &[
         VhdxIntegrityAnomaly::BadMagic { found: [0u8; 8] },
-        VhdxIntegrityAnomaly::ContainerTruncated { size: 0, minimum: 1 },
+        VhdxIntegrityAnomaly::ContainerTruncated {
+            size: 0,
+            minimum: 1,
+        },
         VhdxIntegrityAnomaly::HeaderChecksumMismatch {
             copy: 1,
             computed: 0,
@@ -226,10 +229,7 @@ fn mitre_techniques_returns_expected_ids() {
             },
             "T1036",
         ),
-        (
-            VhdxIntegrityAnomaly::FileWriteGuidAllZeros,
-            "T1070",
-        ),
+        (VhdxIntegrityAnomaly::FileWriteGuidAllZeros, "T1070"),
     ];
 
     for (anomaly, expected_id) in mapped {

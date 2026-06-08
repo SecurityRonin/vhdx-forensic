@@ -1,15 +1,15 @@
+use crate::bytes::{le_arr16, le_u32, le_u64};
 use crate::error::{Result, VhdxError};
 use crate::header::{crc32c, parse_active_header};
-use crate::bytes::{le_arr16, le_u32, le_u64};
 
 /// Apply a dirty VHDX log to the in-memory buffer before parsing.
 ///
-/// If the active header's LogGuid is all-zeros or LogLength is zero the image
+/// If the active header's `LogGuid` is all-zeros or `LogLength` is zero the image
 /// is clean and this is a no-op.  Otherwise every valid log entry whose
-/// LogGuid matches the header is applied to `data` in ascending sequence
+/// `LogGuid` matches the header is applied to `data` in ascending sequence
 /// order so that subsequent region/metadata/BAT parsing sees the committed
 /// state.
-pub(crate) fn apply(data: &mut Vec<u8>) -> Result<()> {
+pub(crate) fn apply(data: &mut [u8]) -> Result<()> {
     let header = parse_active_header(data)?;
     if header.log_length == 0 || header.log_guid == [0u8; 16] {
         return Ok(());
@@ -18,7 +18,7 @@ pub(crate) fn apply(data: &mut Vec<u8>) -> Result<()> {
 }
 
 fn apply_region(
-    data: &mut Vec<u8>,
+    data: &mut [u8],
     log_offset: u64,
     log_length: u32,
     expected_guid: &[u8; 16],
@@ -40,8 +40,7 @@ fn apply_region(
         if &data[abs..abs + 4] != b"loge" {
             break;
         }
-        let entry_len =
-            le_u32(data, abs + 8) as usize;
+        let entry_len = le_u32(data, abs + 8) as usize;
         if entry_len < 64 || abs + entry_len > log_end {
             break;
         }

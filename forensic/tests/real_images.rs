@@ -17,7 +17,9 @@
 //!
 //! See tests/data/SOURCES.md for image provenance, checksums, and tool versions.
 
-use vhdx_forensic::{anomalies_at_least, Severity, VhdxIntegrity, VhdxIntegrityAnomaly, VhdxReader};
+use vhdx_forensic::{
+    anomalies_at_least, Severity, VhdxIntegrity, VhdxIntegrityAnomaly, VhdxReader,
+};
 
 fn data(name: &str) -> Vec<u8> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -38,7 +40,11 @@ fn qemu_empty_dynamic_opens() {
 fn qemu_empty_dynamic_virtual_disk_size() {
     let reader = VhdxReader::from_bytes(data("qemu_empty_dynamic.vhdx")).expect("must open");
     // Cross-validated with: qemu-img info qemu_empty_dynamic.vhdx → virtual size: 16 MiB
-    assert_eq!(reader.virtual_disk_size(), 16 * 1024 * 1024, "virtual_disk_size must be 16 MiB");
+    assert_eq!(
+        reader.virtual_disk_size(),
+        16 * 1024 * 1024,
+        "virtual_disk_size must be 16 MiB"
+    );
 }
 
 #[test]
@@ -63,7 +69,11 @@ fn qemu_fixed_opens() {
 fn qemu_fixed_virtual_disk_size() {
     let reader = VhdxReader::from_bytes(data("qemu_fixed.vhdx")).expect("must open");
     // Cross-validated with: qemu-img create -o subformat=fixed ... 8M → size=8388608
-    assert_eq!(reader.virtual_disk_size(), 8 * 1024 * 1024, "virtual_disk_size must be 8 MiB");
+    assert_eq!(
+        reader.virtual_disk_size(),
+        8 * 1024 * 1024,
+        "virtual_disk_size must be 8 MiB"
+    );
 }
 
 #[test]
@@ -90,7 +100,9 @@ fn detect_bad_magic_in_real_image() {
     image[0..8].fill(0xFF);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::BadMagic { .. })),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::BadMagic { .. })),
         "BadMagic must be detected after corrupting file magic bytes [0..8]"
     );
 }
@@ -103,7 +115,9 @@ fn detect_header_crc_mismatch_in_real_image() {
     image[0x0001_0010] ^= 0x01;
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::HeaderChecksumMismatch { .. })),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::HeaderChecksumMismatch { .. })),
         "HeaderChecksumMismatch must be detected after corrupting header 1 payload"
     );
 }
@@ -117,8 +131,11 @@ fn detect_region_table_crc_mismatch_in_real_image() {
     image[0x0003_0000..0x0003_0004].fill(0xFF);
     let issues = VhdxIntegrity::new(&image).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::RegionTableChecksumMismatch { .. }
-            | VhdxIntegrityAnomaly::BothRegionTableCopiesInvalid)),
+        issues.iter().any(|a| matches!(
+            a,
+            VhdxIntegrityAnomaly::RegionTableChecksumMismatch { .. }
+                | VhdxIntegrityAnomaly::BothRegionTableCopiesInvalid
+        )),
         "Region table corruption must be detected after overwriting the 'regi' signature"
     );
 }
@@ -130,7 +147,9 @@ fn detect_container_truncated_in_real_image() {
     let truncated = &image[..256 * 1024];
     let issues = VhdxIntegrity::new(truncated).analyse();
     assert!(
-        issues.iter().any(|a| matches!(a, VhdxIntegrityAnomaly::ContainerTruncated { .. })),
+        issues
+            .iter()
+            .any(|a| matches!(a, VhdxIntegrityAnomaly::ContainerTruncated { .. })),
         "ContainerTruncated must be detected when file is smaller than 320 KiB"
     );
 }

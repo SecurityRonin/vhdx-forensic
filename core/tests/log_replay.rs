@@ -22,21 +22,20 @@ use vhdx::{
 // returns 0x00; after replay it must return 0xAB.
 // ───────────────────────────────────────────────────────────────────────────
 
-const FILE_SIZE: usize = 0x500000;
-const LOG_OFFSET: u64 = 0x100000;
-const LOG_LENGTH: u32 = 0x100000;
-const META_OFFSET: u64 = 0x200000;
-const META_LENGTH: u32 = 0x100000;
-const BAT_OFFSET: u64 = 0x300000;
-const BAT_LENGTH: u32 = 0x100000;
-const DATA_OFFSET: u64 = 0x400000;
-const VIRTUAL_DISK_SIZE: u64 = 0x100000; // 1 MB
-const BLOCK_SIZE: u32 = 0x100000; // 1 MB
+const FILE_SIZE: usize = 0x0050_0000;
+const LOG_OFFSET: u64 = 0x0010_0000;
+const LOG_LENGTH: u32 = 0x0010_0000;
+const META_OFFSET: u64 = 0x0020_0000;
+const META_LENGTH: u32 = 0x0010_0000;
+const BAT_OFFSET: u64 = 0x0030_0000;
+const BAT_LENGTH: u32 = 0x0010_0000;
+const DATA_OFFSET: u64 = 0x0040_0000;
+const VIRTUAL_DISK_SIZE: u64 = 0x0010_0000; // 1 MB
+const BLOCK_SIZE: u32 = 0x0010_0000; // 1 MB
 
 // Non-zero GUID to mark the log as dirty (must match the log entry's LogGuid).
 const LOG_GUID: [u8; 16] = [
-    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
-    0x10,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
 ];
 
 fn write_header(slot: &mut [u8], seq: u64, log_guid: [u8; 16], log_off: u64, log_len: u32) {
@@ -45,7 +44,7 @@ fn write_header(slot: &mut [u8], seq: u64, log_guid: [u8; 16], log_off: u64, log
     h[0..4].copy_from_slice(b"head");
     h[4..8].fill(0); // CRC placeholder
     h[8..16].copy_from_slice(&seq.to_le_bytes()); // SequenceNumber
-    // FileWriteGuid [16..32] and DataWriteGuid [32..48] left as zeros (valid).
+                                                  // FileWriteGuid [16..32] and DataWriteGuid [32..48] left as zeros (valid).
     h[48..64].copy_from_slice(&log_guid); // LogGuid
     h[64..66].copy_from_slice(&1u16.to_le_bytes()); // LogVersion
     h[66..68].copy_from_slice(&1u16.to_le_bytes()); // Version
@@ -55,13 +54,7 @@ fn write_header(slot: &mut [u8], seq: u64, log_guid: [u8; 16], log_off: u64, log
     h[4..8].copy_from_slice(&c.to_le_bytes());
 }
 
-fn write_region_table(
-    rt: &mut [u8],
-    bat_off: u64,
-    bat_len: u32,
-    meta_off: u64,
-    meta_len: u32,
-) {
+fn write_region_table(rt: &mut [u8], bat_off: u64, bat_len: u32, meta_off: u64, meta_len: u32) {
     // Header: 16 bytes.  Entries start at offset 16, each 32 bytes (§2.2).
     rt[0..4].copy_from_slice(b"regi");
     rt[4..8].fill(0); // CRC placeholder
@@ -126,7 +119,7 @@ fn write_metadata(region: &mut [u8]) {
 
 /// Build a 5 MB VHDX with:
 ///  - one 1 MB data block whose byte 0 is 0x00 in the file
-///  - a dirty log entry that writes 0xAB to file offset DATA_OFFSET+0
+///  - a dirty log entry that writes 0xAB to file offset `DATA_OFFSET+0`
 ///
 /// A reader that applies log replay must return 0xAB on the first virtual
 /// byte; one that ignores the log returns 0x00.
@@ -165,7 +158,7 @@ fn build_dirty_log_vhdx() -> Vec<u8> {
     );
 
     // Metadata region
-    write_metadata(&mut buf[META_OFFSET as usize..(META_OFFSET + META_LENGTH as u64) as usize]);
+    write_metadata(&mut buf[META_OFFSET as usize..(META_OFFSET + u64::from(META_LENGTH)) as usize]);
 
     // BAT: block 0 FULLY_PRESENT at DATA_OFFSET.
     // bat_entry = (file_offset_in_mb << 20) | state
@@ -186,10 +179,10 @@ fn build_dirty_log_vhdx() -> Vec<u8> {
         e[0..4].copy_from_slice(b"loge");
         // e[4..8] CRC = 0 for now (fill after)
         e[8..12].copy_from_slice(&(ENTRY_LEN as u32).to_le_bytes()); // EntryLength
-        // e[12..16] Tail = 0
+                                                                     // e[12..16] Tail = 0
         e[16..24].copy_from_slice(&1u64.to_le_bytes()); // SequenceNumber
         e[24..28].copy_from_slice(&1u32.to_le_bytes()); // DescriptorCount
-        // e[28..32] Reserved
+                                                        // e[28..32] Reserved
         e[32..48].copy_from_slice(&LOG_GUID); // LogGuid
         let file_size = FILE_SIZE as u64;
         e[48..56].copy_from_slice(&file_size.to_le_bytes()); // FlushedFileOffset

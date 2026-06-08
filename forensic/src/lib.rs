@@ -11,14 +11,14 @@ pub mod integrity;
 pub mod repair;
 
 // Re-export the reader so callers don't need two crates for basic use.
-pub use vhdx::{header::crc32c, Result, VhdxError, VhdxReader, FILE_MAGIC};
 pub use integrity::{AnalysisSummary, Severity, VhdxIntegrity, VhdxIntegrityAnomaly};
+pub use vhdx::{header::crc32c, Result, VhdxError, VhdxReader, FILE_MAGIC};
 
 /// Return references to all anomalies whose severity is at or above `min`.
-pub fn anomalies_at_least<'a>(
-    anomalies: &'a [VhdxIntegrityAnomaly],
+pub fn anomalies_at_least(
+    anomalies: &[VhdxIntegrityAnomaly],
     min: Severity,
-) -> Vec<&'a VhdxIntegrityAnomaly> {
+) -> Vec<&VhdxIntegrityAnomaly> {
     anomalies.iter().filter(|a| a.severity() >= min).collect()
 }
 pub use repair::{CannotRepair, RepairAction, RepairReport, VhdxRepair};
