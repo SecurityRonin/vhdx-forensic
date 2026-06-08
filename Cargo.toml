@@ -3,7 +3,7 @@ name = "vhdx-forensic"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Pure-Rust read-only VHDX container reader for forensic analysis"
+description = "Forensic integrity analyzer for VHDX (Hyper-V) virtual disks — tamper/anomaly findings and in-memory repair, built on vhdx-core"
 license = "MIT"
 repository = "https://github.com/SecurityRonin/vhdx-forensic"
 homepage = "https://github.com/SecurityRonin/vhdx-forensic"
@@ -15,7 +15,7 @@ categories = ["parser-implementations", "filesystem"]
 [dependencies]
 forensicnomicon = { version = "0.3.1" }
 thiserror = "2"
-vhdx = { path = "../vhdx/vhdx" }
+vhdx = { version = "0.2.0", package = "vhdx-core" }
 
 [dev-dependencies]
 tempfile = "3"
