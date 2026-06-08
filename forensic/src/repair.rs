@@ -270,7 +270,11 @@ impl VhdxRepair {
 
     fn clear_bat_reserved_bits(&mut self, bat_offset: u64, bat_index: usize) -> RepairAction {
         let byte_pos = bat_offset as usize + bat_index * 8;
-        let raw = u64::from_le_bytes(self.data[byte_pos..byte_pos + 8].try_into().unwrap());
+        let mut raw_bytes = [0u8; 8];
+        if let Some(s) = self.data.get(byte_pos..byte_pos + 8) {
+            raw_bytes.copy_from_slice(s);
+        }
+        let raw = u64::from_le_bytes(raw_bytes);
         let cleaned = raw & !0x000F_FFF8u64;
         self.data[byte_pos..byte_pos + 8].copy_from_slice(&cleaned.to_le_bytes());
         RepairAction {

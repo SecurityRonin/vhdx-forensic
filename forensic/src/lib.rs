@@ -5,6 +5,7 @@
 //!
 //! # Layer
 //! FORENSIC AUDIT — equivalent role to `ewf-forensic` for E01 images.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod integrity;
 pub mod repair;

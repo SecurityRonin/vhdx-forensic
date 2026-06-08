@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! In-memory VHDX builder for tests.
 //!
 //! Constructs the minimal valid VHDX byte structure per MS-VHDX spec,

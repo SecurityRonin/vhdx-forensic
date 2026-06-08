@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Ground-truth validation: zero false positives on real VHDX images,
 //! and detection capability via injection into known-good real images.
 //!

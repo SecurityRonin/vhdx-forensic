@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! RED: repair/salvage tests — all must FAIL until GREEN implementation.
 //!
 //! Each test verifies that VhdxRepair either:

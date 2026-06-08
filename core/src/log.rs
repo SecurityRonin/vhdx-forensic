@@ -1,5 +1,6 @@
 use crate::error::{Result, VhdxError};
 use crate::header::{crc32c, parse_active_header};
+use crate::bytes::{le_arr16, le_u32, le_u64};
 
 /// Apply a dirty VHDX log to the in-memory buffer before parsing.
 ///
@@ -40,7 +41,7 @@ fn apply_region(
             break;
         }
         let entry_len =
-            u32::from_le_bytes(data[abs + 8..abs + 12].try_into().unwrap()) as usize;
+            le_u32(data, abs + 8) as usize;
         if entry_len < 64 || abs + entry_len > log_end {
             break;
         }
@@ -48,7 +49,7 @@ fn apply_region(
         let entry_bytes = data[abs..abs + entry_len].to_vec();
 
         // Validate CRC32C (computed with [4..8] zeroed).
-        let stored = u32::from_le_bytes(entry_bytes[4..8].try_into().unwrap());
+        let stored = le_u32(&entry_bytes, 4);
         let mut tmp = entry_bytes.clone();
         tmp[4..8].fill(0);
         if crc32c(&tmp) != stored {
@@ -57,13 +58,13 @@ fn apply_region(
         }
 
         // Skip entries whose LogGuid doesn't match the active header's.
-        let entry_guid: &[u8; 16] = entry_bytes[32..48].try_into().unwrap();
-        if entry_guid != expected_guid {
+        let entry_guid: [u8; 16] = le_arr16(&entry_bytes, 32);
+        if &entry_guid != expected_guid {
             pos += entry_len;
             continue;
         }
 
-        let seq = u64::from_le_bytes(entry_bytes[16..24].try_into().unwrap());
+        let seq = le_u64(&entry_bytes, 16);
         entries.push((seq, entry_bytes));
         pos += entry_len;
     }
@@ -76,7 +77,7 @@ fn apply_region(
 }
 
 fn apply_entry(data: &mut [u8], entry: &[u8]) {
-    let descriptor_count = u32::from_le_bytes(entry[24..28].try_into().unwrap()) as usize;
+    let descriptor_count = le_u32(entry, 24) as usize;
     let desc_start = 64;
     let data_sector_base = desc_start + descriptor_count * 32;
     let mut sector_idx = 0usize;
@@ -86,7 +87,7 @@ fn apply_entry(data: &mut [u8], entry: &[u8]) {
         match &d[0..4] {
             b"desc" => {
                 // Data descriptor: copy 4096-byte sector to FileOffset in the container.
-                let file_off = u64::from_le_bytes(d[24..32].try_into().unwrap()) as usize;
+                let file_off = le_u64(d, 24) as usize;
                 let sector_off = data_sector_base + sector_idx * 4096;
                 if sector_off + 4096 <= entry.len() && file_off + 4096 <= data.len() {
                     data[file_off..file_off + 4096]
@@ -96,8 +97,8 @@ fn apply_entry(data: &mut [u8], entry: &[u8]) {
             }
             b"zero" => {
                 // Zero descriptor: fill ZeroLength bytes at FileOffset with zeros.
-                let zero_len = u64::from_le_bytes(d[8..16].try_into().unwrap()) as usize;
-                let file_off = u64::from_le_bytes(d[16..24].try_into().unwrap()) as usize;
+                let zero_len = le_u64(d, 8) as usize;
+                let file_off = le_u64(d, 16) as usize;
                 let end = file_off.saturating_add(zero_len).min(data.len());
                 if file_off < data.len() {
                     data[file_off..end].fill(0);

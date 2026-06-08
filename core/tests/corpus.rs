@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use vhdx::VhdxReader;

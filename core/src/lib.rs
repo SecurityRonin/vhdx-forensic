@@ -10,8 +10,10 @@
 //!
 //! # Layer
 //! CONTAINER — equivalent role to `ewf` for E01 images.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod bat;
+mod bytes;
 mod error;
 pub mod header;
 mod log;

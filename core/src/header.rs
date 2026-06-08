@@ -1,4 +1,5 @@
 use crate::error::{Result, VhdxError};
+use crate::bytes::{le_arr16, le_u32, le_u64};
 
 /// Offsets per MS-VHDX spec §2.1 — each block occupies a 64 KB slot within
 /// the first 1 MB of the file (the "header section").
@@ -52,10 +53,10 @@ fn parse_one_header(data: &[u8], offset: usize) -> Result<VhdxHeader> {
     if !verify_crc32c(slice) {
         return Err(VhdxError::NoValidHeader);
     }
-    let sequence_number = u64::from_le_bytes(slice[8..16].try_into().unwrap());
-    let log_guid: [u8; 16] = slice[48..64].try_into().unwrap();
-    let log_length = u32::from_le_bytes(slice[68..72].try_into().unwrap());
-    let log_offset = u64::from_le_bytes(slice[72..80].try_into().unwrap());
+    let sequence_number = le_u64(slice, 8);
+    let log_guid: [u8; 16] = le_arr16(slice, 48);
+    let log_length = le_u32(slice, 68);
+    let log_offset = le_u64(slice, 72);
     Ok(VhdxHeader {
         sequence_number,
         log_guid,
@@ -65,7 +66,7 @@ fn parse_one_header(data: &[u8], offset: usize) -> Result<VhdxHeader> {
 }
 
 fn verify_crc32c(block: &[u8]) -> bool {
-    let stored = u32::from_le_bytes(block[4..8].try_into().unwrap());
+    let stored = le_u32(block, 4);
     let mut buf = block.to_vec();
     buf[4..8].fill(0);
     crc32c(&buf) == stored

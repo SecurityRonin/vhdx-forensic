@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Integration tests against the committed VHDX/VHD real-image corpus.
 //!
 //! All fixtures are in `tests/data/` — provenance in `tests/data/SOURCES.md`.

@@ -30,28 +30,44 @@ const BAT_RESERVED_BITS_MASK: u64 = 0x000F_FFF8;
 
 // ── Module-level helpers ──────────────────────────────────────────────────────
 
-/// Read a little-endian u16 from `s` at byte offset `o`.
+/// Read a little-endian u16 from `s` at byte offset `o`; `0` if out of range.
 #[inline]
 fn r16(s: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes(s[o..o + 2].try_into().unwrap())
+    let mut b = [0u8; 2];
+    if let Some(t) = s.get(o..o + 2) {
+        b.copy_from_slice(t);
+    }
+    u16::from_le_bytes(b)
 }
 
-/// Read a little-endian u32 from `s` at byte offset `o`.
+/// Read a little-endian u32 from `s` at byte offset `o`; `0` if out of range.
 #[inline]
 fn r32(s: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(s[o..o + 4].try_into().unwrap())
+    let mut b = [0u8; 4];
+    if let Some(t) = s.get(o..o + 4) {
+        b.copy_from_slice(t);
+    }
+    u32::from_le_bytes(b)
 }
 
-/// Read a little-endian u64 from `s` at byte offset `o`.
+/// Read a little-endian u64 from `s` at byte offset `o`; `0` if out of range.
 #[inline]
 fn r64(s: &[u8], o: usize) -> u64 {
-    u64::from_le_bytes(s[o..o + 8].try_into().unwrap())
+    let mut b = [0u8; 8];
+    if let Some(t) = s.get(o..o + 8) {
+        b.copy_from_slice(t);
+    }
+    u64::from_le_bytes(b)
 }
 
-/// Copy 16 bytes from `s` at offset `o` into a GUID array.
+/// Copy 16 bytes from `s` at offset `o` into a GUID array; zero-filled if out of range.
 #[inline]
 fn guid_at(s: &[u8], o: usize) -> [u8; 16] {
-    s[o..o + 16].try_into().unwrap()
+    let mut b = [0u8; 16];
+    if let Some(t) = s.get(o..o + 16) {
+        b.copy_from_slice(t);
+    }
+    b
 }
 
 /// Compute CRC32C of `block` with bytes 4..8 zeroed (the standard VHDX CRC field).
@@ -1018,9 +1034,9 @@ impl<'a> VhdxIntegrity<'a> {
             if active[32..48].iter().all(|&b| b == 0) {
                 issues.push(VhdxIntegrityAnomaly::DataWriteGuidAllZeros);
             }
-            let log_guid: [u8; 16] = active[48..64].try_into().unwrap();
-            let log_length = u32::from_le_bytes(active[68..72].try_into().unwrap());
-            let log_offset = u64::from_le_bytes(active[72..80].try_into().unwrap());
+            let log_guid: [u8; 16] = guid_at(active, 48);
+            let log_length = r32(active, 68);
+            let log_offset = r64(active, 72);
             let log_guid_zero = log_guid == [0u8; 16];
             if !log_guid_zero && log_length == 0 {
                 issues.push(VhdxIntegrityAnomaly::LogGuidWithNoLog { log_guid });
@@ -1030,11 +1046,11 @@ impl<'a> VhdxIntegrity<'a> {
             }
 
             // 2B: Version fields.
-            let log_version = u16::from_le_bytes(active[64..66].try_into().unwrap());
+            let log_version = r16(active, 64);
             if log_version != 1 {
                 issues.push(VhdxIntegrityAnomaly::LogVersionInvalid { version: log_version });
             }
-            let version = u16::from_le_bytes(active[66..68].try_into().unwrap());
+            let version = r16(active, 66);
             if version != 1 {
                 issues.push(VhdxIntegrityAnomaly::VersionInvalid { version });
             }
@@ -1158,9 +1174,9 @@ impl<'a> VhdxIntegrity<'a> {
             Some(h) => h,
             None => return issues,
         };
-        let log_length = u32::from_le_bytes(active[68..72].try_into().unwrap());
-        let log_offset = u64::from_le_bytes(active[72..80].try_into().unwrap());
-        let header_log_guid: [u8; 16] = active[48..64].try_into().unwrap();
+        let log_length = r32(active, 68);
+        let log_offset = r64(active, 72);
+        let header_log_guid: [u8; 16] = guid_at(active, 48);
         if log_length == 0 {
             return issues;
         }
@@ -1194,12 +1210,12 @@ impl<'a> VhdxIntegrity<'a> {
                 break;
             }
 
-            let entry_length = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+            let entry_length = r32(entry, 8) as usize;
             if entry_length < 64 || pos + entry_length > log_data.len() {
                 break;
             }
 
-            let stored_crc = u32::from_le_bytes(entry[4..8].try_into().unwrap());
+            let stored_crc = r32(entry, 4);
             let mut entry_buf = log_data[pos..pos + entry_length].to_vec();
             entry_buf[4..8].fill(0);
             let computed_crc = crc32c(&entry_buf);
@@ -1213,7 +1229,7 @@ impl<'a> VhdxIntegrity<'a> {
                 continue;
             }
 
-            let entry_guid: [u8; 16] = entry[32..48].try_into().unwrap();
+            let entry_guid: [u8; 16] = guid_at(entry, 32);
             if entry_guid != header_log_guid {
                 issues.push(VhdxIntegrityAnomaly::LogEntryGuidMismatch {
                     entry_offset,
@@ -1222,7 +1238,7 @@ impl<'a> VhdxIntegrity<'a> {
                 });
             }
 
-            let seq = u64::from_le_bytes(entry[16..24].try_into().unwrap());
+            let seq = r64(entry, 16);
             if let Some(prev) = prev_seq {
                 if seq != prev.wrapping_add(1) {
                     issues.push(VhdxIntegrityAnomaly::LogSequenceNumberGap {
@@ -1257,7 +1273,7 @@ impl<'a> VhdxIntegrity<'a> {
         let container_size = self.data.len() as u64;
 
         // 3D: Reserved bytes 12–15 of RT header.
-        let header_reserved = u32::from_le_bytes(rt[12..16].try_into().unwrap());
+        let header_reserved = r32(rt, 12);
         if header_reserved != 0 {
             issues.push(VhdxIntegrityAnomaly::RegionTableReservedNonZero {
                 copy,
@@ -1267,7 +1283,7 @@ impl<'a> VhdxIntegrity<'a> {
         }
 
         let entry_count =
-            (u32::from_le_bytes(rt[8..12].try_into().unwrap()) as usize).min(2048);
+            (r32(rt, 8) as usize).min(2048);
         if entry_count == 0 {
             issues.push(VhdxIntegrityAnomaly::RegionEntryCountZero { copy });
             return issues;
@@ -1282,10 +1298,10 @@ impl<'a> VhdxIntegrity<'a> {
             let mut guid = [0u8; 16];
             guid.copy_from_slice(&rt[base..base + 16]);
             let file_offset =
-                u64::from_le_bytes(rt[base + 16..base + 24].try_into().unwrap());
-            let length = u32::from_le_bytes(rt[base + 24..base + 28].try_into().unwrap());
+                r64(rt, base + 16);
+            let length = r32(rt, base + 24);
             let required_field =
-                u32::from_le_bytes(rt[base + 28..base + 32].try_into().unwrap());
+                r32(rt, base + 28);
 
             // 3D: Reserved bits 1–31 of the Required word.
             let reserved_bits = required_field & !1u32;
@@ -1351,8 +1367,8 @@ impl<'a> VhdxIntegrity<'a> {
 
         // 3B: Log vs structural zone overlap.
         if let Some(active) = self.active_header_block() {
-            let log_length = u32::from_le_bytes(active[68..72].try_into().unwrap());
-            let log_offset = u64::from_le_bytes(active[72..80].try_into().unwrap());
+            let log_length = r32(active, 68);
+            let log_offset = r64(active, 72);
             if log_length > 0 {
                 let log_end = log_offset.saturating_add(u64::from(log_length));
                 let structural: &[(&'static str, u64, u64)] = &[
@@ -1474,14 +1490,14 @@ impl<'a> VhdxIntegrity<'a> {
         if &rt[0..4] != REGION_TABLE_SIGNATURE {
             return None;
         }
-        let stored = u32::from_le_bytes(rt[4..8].try_into().unwrap());
+        let stored = r32(rt, 4);
         let mut buf = rt.to_vec();
         buf[4..8].fill(0);
         if crc32c(&buf) != stored {
             return None;
         }
         let entry_count =
-            (u32::from_le_bytes(rt[8..12].try_into().unwrap()) as usize).min(2048);
+            (r32(rt, 8) as usize).min(2048);
         let mut bat: Option<(u64, u32)> = None;
         let mut meta: Option<(u64, u32)> = None;
         for i in 0..entry_count {
@@ -1491,8 +1507,8 @@ impl<'a> VhdxIntegrity<'a> {
             }
             let mut guid = [0u8; 16];
             guid.copy_from_slice(&rt[base..base + 16]);
-            let off = u64::from_le_bytes(rt[base + 16..base + 24].try_into().unwrap());
-            let len = u32::from_le_bytes(rt[base + 24..base + 28].try_into().unwrap());
+            let off = r64(rt, base + 16);
+            let len = r32(rt, base + 24);
             if guid == BAT_GUID {
                 bat = Some((off, len));
             } else if guid == METADATA_GUID {
@@ -1518,7 +1534,7 @@ impl<'a> VhdxIntegrity<'a> {
             let region = &self.data[meta_start..meta_table_end];
             if &region[..8] == METADATA_TABLE_SIGNATURE {
                 let count =
-                    u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
+                    r16(region, 10) as usize;
                 for i in 0..count.min(256) {
                     let base = 32usize.checked_add(i.checked_mul(32)?)?;
                     if base + 32 > region.len() {
@@ -1526,38 +1542,26 @@ impl<'a> VhdxIntegrity<'a> {
                     }
                     let mut guid = [0u8; 16];
                     guid.copy_from_slice(&region[base..base + 16]);
-                    let item_off = u32::from_le_bytes(
-                        region[base + 16..base + 20].try_into().unwrap(),
-                    ) as usize;
+                    let item_off = r32(region, base + 16) as usize;
                     // Offset is from the start of the metadata region (MS-VHDX §3.3.2).
                     let data_start = meta_start.checked_add(item_off)?;
                     if guid == GUID_FILE_PARAMETERS && self.data.len() >= data_start + 8 {
-                        block_size = Some(u32::from_le_bytes(
-                            self.data[data_start..data_start + 4].try_into().unwrap(),
-                        ));
-                        let flags = u32::from_le_bytes(
-                            self.data[data_start + 4..data_start + 8].try_into().unwrap(),
-                        );
+                        block_size = Some(r32(self.data, data_start));
+                        let flags = r32(self.data, data_start + 4);
                         leave_alloc = flags & 1 != 0;
                         has_parent = flags & 2 != 0;
                     } else if guid == GUID_VIRTUAL_DISK_SIZE
                         && self.data.len() >= data_start + 8
                     {
-                        vdisk_size = Some(u64::from_le_bytes(
-                            self.data[data_start..data_start + 8].try_into().unwrap(),
-                        ));
+                        vdisk_size = Some(r64(self.data, data_start));
                     } else if guid == GUID_LOGICAL_SECTOR_SIZE
                         && self.data.len() >= data_start + 4
                     {
-                        logical_ss = Some(u32::from_le_bytes(
-                            self.data[data_start..data_start + 4].try_into().unwrap(),
-                        ));
+                        logical_ss = Some(r32(self.data, data_start));
                     } else if guid == GUID_PHYSICAL_SECTOR_SIZE
                         && self.data.len() >= data_start + 4
                     {
-                        physical_ss = Some(u32::from_le_bytes(
-                            self.data[data_start..data_start + 4].try_into().unwrap(),
-                        ));
+                        physical_ss = Some(r32(self.data, data_start));
                     } else if guid == GUID_VIRTUAL_DISK_ID
                         && self.data.len() >= data_start + 16
                     {
@@ -1640,7 +1644,7 @@ impl<'a> VhdxIntegrity<'a> {
             let region_size = r.meta_length as usize;
             if &region[..8] == METADATA_TABLE_SIGNATURE {
                 let count =
-                    u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
+                    r16(region, 10) as usize;
                 let mut item_ranges: Vec<(u32, u32)> = Vec::new(); // (item_offset, item_end)
 
                 for i in 0..count.min(2048) {
@@ -1648,12 +1652,8 @@ impl<'a> VhdxIntegrity<'a> {
                     if base + 32 > region.len() {
                         break;
                     }
-                    let item_off = u32::from_le_bytes(
-                        region[base + 16..base + 20].try_into().unwrap(),
-                    );
-                    let item_len = u32::from_le_bytes(
-                        region[base + 20..base + 24].try_into().unwrap(),
-                    );
+                    let item_off = r32(region, base + 16);
+                    let item_len = r32(region, base + 20);
                     let item_end = item_off.saturating_add(item_len);
 
                     // Check: item data extends past end of metadata region.
@@ -1948,7 +1948,7 @@ impl<'a> VhdxIntegrity<'a> {
             if ep + 8 > self.data.len() {
                 break;
             }
-            let raw = u64::from_le_bytes(self.data[ep..ep + 8].try_into().unwrap());
+            let raw = r64(self.data, ep);
             if (raw & 0b111) as u8 != PAYLOAD_BLOCK_FULLY_PRESENT {
                 continue;
             }
@@ -2003,7 +2003,7 @@ impl<'a> VhdxIntegrity<'a> {
                 stored: 0,
             });
         }
-        let stored = u32::from_le_bytes(block[4..8].try_into().unwrap());
+        let stored = r32(block, 4);
         let mut buf = block.to_vec();
         buf[4..8].fill(0);
         let computed = crc32c(&buf);
@@ -2039,7 +2039,7 @@ impl<'a> VhdxIntegrity<'a> {
                 stored: 0,
             });
         }
-        let stored = u32::from_le_bytes(block[4..8].try_into().unwrap());
+        let stored = r32(block, 4);
         let mut buf = block.to_vec();
         buf[4..8].fill(0);
         let computed = crc32c(&buf);
@@ -2059,8 +2059,8 @@ impl<'a> VhdxIntegrity<'a> {
         let h1 = &self.data[HEADER1_OFFSET as usize..HEADER1_OFFSET as usize + HEADER_SIZE];
         let h2 = &self.data[HEADER2_OFFSET as usize..HEADER2_OFFSET as usize + HEADER_SIZE];
 
-        let seq1 = u64::from_le_bytes(h1[8..16].try_into().unwrap());
-        let seq2 = u64::from_le_bytes(h2[8..16].try_into().unwrap());
+        let seq1 = r64(h1, 8);
+        let seq2 = r64(h2, 8);
 
         if seq1 == 0 && seq2 == 0 {
             issues.push(VhdxIntegrityAnomaly::BothSequenceNumbersZero);
@@ -2074,8 +2074,8 @@ impl<'a> VhdxIntegrity<'a> {
             }
         }
 
-        let log_len1 = u32::from_le_bytes(h1[68..72].try_into().unwrap());
-        let log_len2 = u32::from_le_bytes(h2[68..72].try_into().unwrap());
+        let log_len1 = r32(h1, 68);
+        let log_len2 = r32(h2, 68);
         if log_len1 != log_len2 {
             issues.push(VhdxIntegrityAnomaly::HeaderCopyMismatch {
                 field: "LogLength",
@@ -2083,8 +2083,8 @@ impl<'a> VhdxIntegrity<'a> {
                 copy2_value: u64::from(log_len2),
             });
         }
-        let log_off1 = u64::from_le_bytes(h1[72..80].try_into().unwrap());
-        let log_off2 = u64::from_le_bytes(h2[72..80].try_into().unwrap());
+        let log_off1 = r64(h1, 72);
+        let log_off2 = r64(h2, 72);
         if log_off1 != log_off2 {
             issues.push(VhdxIntegrityAnomaly::HeaderCopyMismatch {
                 field: "LogOffset",
@@ -2104,8 +2104,8 @@ impl<'a> VhdxIntegrity<'a> {
         let rt2 = &self.data[REGION_TABLE2_OFFSET as usize
             ..REGION_TABLE2_OFFSET as usize + REGION_TABLE_CRC_COVERAGE];
 
-        let count1 = (u32::from_le_bytes(rt1[8..12].try_into().unwrap()) as usize).min(2048);
-        let count2 = (u32::from_le_bytes(rt2[8..12].try_into().unwrap()) as usize).min(2048);
+        let count1 = (r32(rt1, 8) as usize).min(2048);
+        let count2 = (r32(rt2, 8) as usize).min(2048);
         let count = count1.min(count2);
 
         for i in 0..count {
@@ -2128,8 +2128,8 @@ impl<'a> VhdxIntegrity<'a> {
                 continue;
             };
 
-            let off1 = u64::from_le_bytes(rt1[base + 16..base + 24].try_into().unwrap());
-            let off2 = u64::from_le_bytes(rt2[base + 16..base + 24].try_into().unwrap());
+            let off1 = r64(rt1, base + 16);
+            let off2 = r64(rt2, base + 16);
             if off1 != off2 {
                 issues.push(VhdxIntegrityAnomaly::RegionTableCopyMismatch {
                     region: region_name,
@@ -2138,8 +2138,8 @@ impl<'a> VhdxIntegrity<'a> {
                     rt2_value: off2,
                 });
             }
-            let len1 = u32::from_le_bytes(rt1[base + 24..base + 28].try_into().unwrap());
-            let len2 = u32::from_le_bytes(rt2[base + 24..base + 28].try_into().unwrap());
+            let len1 = r32(rt1, base + 24);
+            let len2 = r32(rt2, base + 24);
             if len1 != len2 {
                 issues.push(VhdxIntegrityAnomaly::RegionTableCopyMismatch {
                     region: region_name,
@@ -2161,9 +2161,9 @@ impl<'a> VhdxIntegrity<'a> {
         match (h1_ok, h2_ok) {
             (true, true) => {
                 let seq1 =
-                    u64::from_le_bytes(self.data[h1_off + 8..h1_off + 16].try_into().unwrap());
+                    r64(self.data, h1_off + 8);
                 let seq2 =
-                    u64::from_le_bytes(self.data[h2_off + 8..h2_off + 16].try_into().unwrap());
+                    r64(self.data, h2_off + 8);
                 if seq1 >= seq2 {
                     Some(&self.data[h1_off..h1_off + HEADER_SIZE])
                 } else {

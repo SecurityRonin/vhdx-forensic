@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! RED: integrity detection tests — all must FAIL until GREEN implementation.
 //!
 //! Each test builds a VHDX image (or crafts a raw buffer) with one specific

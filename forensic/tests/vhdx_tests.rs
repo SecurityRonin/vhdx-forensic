@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Integration tests for `vhdx-forensic`.
 //!
 //! Uses an in-memory `VhdxBuilder` that produces valid VHDX byte vectors,

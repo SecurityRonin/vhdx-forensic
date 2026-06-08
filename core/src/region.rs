@@ -1,4 +1,5 @@
 use crate::error::{Result, VhdxError};
+use crate::bytes::{le_u32, le_u64};
 use crate::header::crc32c;
 
 pub const REGION_TABLE_SIGNATURE: &[u8; 4] = b"regi";
@@ -47,7 +48,7 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
     if &slice[0..4] != REGION_TABLE_SIGNATURE {
         return Err(VhdxError::InvalidRegionTable);
     }
-    let stored_crc = u32::from_le_bytes(slice[4..8].try_into().unwrap());
+    let stored_crc = le_u32(slice, 4);
     let mut buf = slice[..65536.min(slice.len())].to_vec();
     buf.resize(65536, 0);
     buf[4..8].fill(0);
@@ -55,7 +56,7 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
         return Err(VhdxError::InvalidRegionTable);
     }
     let entry_count =
-        (u32::from_le_bytes(slice[8..12].try_into().unwrap()) as usize).min(REGION_ENTRY_COUNT_MAX);
+        (le_u32(slice, 8) as usize).min(REGION_ENTRY_COUNT_MAX);
     let container_len = data.len();
     let mut bat: Option<RegionEntry> = None;
     let mut metadata: Option<RegionEntry> = None;
@@ -66,8 +67,8 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
         }
         let mut guid = [0u8; 16];
         guid.copy_from_slice(&slice[base..base + 16]);
-        let file_offset = u64::from_le_bytes(slice[base + 16..base + 24].try_into().unwrap());
-        let length = u32::from_le_bytes(slice[base + 24..base + 28].try_into().unwrap());
+        let file_offset = le_u64(slice, base + 16);
+        let length = le_u32(slice, base + 24);
         let region_end = file_offset
             .checked_add(u64::from(length))
             .ok_or(VhdxError::OffsetOutOfBounds)?;

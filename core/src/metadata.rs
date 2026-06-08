@@ -1,4 +1,5 @@
 use crate::error::{Result, VhdxError};
+use crate::bytes::{le_u16, le_u32, le_u64};
 
 pub const METADATA_TABLE_SIGNATURE: &[u8; 8] = b"metadata";
 
@@ -94,7 +95,7 @@ pub fn parse_metadata(data: &[u8], region_offset: u64, region_len: u32) -> Resul
     if &region[0..8] != METADATA_TABLE_SIGNATURE {
         return Err(VhdxError::MetadataMissing("bad metadata signature"));
     }
-    let entry_count = u16::from_le_bytes(region[10..12].try_into().unwrap()) as usize;
+    let entry_count = le_u16(region, 10) as usize;
 
     let mut block_size: Option<u32> = None;
     let mut has_parent = false;
@@ -109,9 +110,9 @@ pub fn parse_metadata(data: &[u8], region_offset: u64, region_len: u32) -> Resul
         let mut guid = [0u8; 16];
         guid.copy_from_slice(&region[base..base + 16]);
         let item_offset =
-            u32::from_le_bytes(region[base + 16..base + 20].try_into().unwrap()) as usize;
+            le_u32(region, base + 16) as usize;
         let item_len =
-            u32::from_le_bytes(region[base + 20..base + 24].try_into().unwrap()) as usize;
+            le_u32(region, base + 20) as usize;
 
         let data_start = start + item_offset;
         let data_end = data_start + item_len;
@@ -121,15 +122,15 @@ pub fn parse_metadata(data: &[u8], region_offset: u64, region_len: u32) -> Resul
         let item_data = &data[data_start..data_end];
 
         if guid == GUID_FILE_PARAMETERS && item_data.len() >= 8 {
-            block_size = Some(u32::from_le_bytes(item_data[0..4].try_into().unwrap()));
-            let flags = u32::from_le_bytes(item_data[4..8].try_into().unwrap());
+            block_size = Some(le_u32(item_data, 0));
+            let flags = le_u32(item_data, 4);
             has_parent = flags & 2 != 0;
         } else if (guid == GUID_VIRTUAL_DISK_SIZE || guid == GUID_VIRTUAL_DISK_SIZE_QEMU_COMPAT)
             && item_data.len() >= 8
         {
-            virtual_disk_size = Some(u64::from_le_bytes(item_data[0..8].try_into().unwrap()));
+            virtual_disk_size = Some(le_u64(item_data, 0));
         } else if guid == GUID_LOGICAL_SECTOR_SIZE && item_data.len() >= 4 {
-            logical_sector_size = Some(u32::from_le_bytes(item_data[0..4].try_into().unwrap()));
+            logical_sector_size = Some(le_u32(item_data, 0));
         }
     }
 

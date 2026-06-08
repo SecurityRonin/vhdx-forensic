@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 /// Corpus differential tests: bytes from VhdxReader must match `qemu-img convert -O raw`.
 ///
 /// These tests skip automatically if qemu-img is not installed, so they run in CI

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Compatibility tests against the log2timeline/dfvfs reference VHDX corpus.
 //!
 //! These images were created by the dfvfs toolchain — NOT by vhdx-forensic.

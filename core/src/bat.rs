@@ -1,4 +1,5 @@
 use crate::error::{Result, VhdxError};
+use crate::bytes::le_u64;
 use crate::metadata::VhdxMetadata;
 
 const PAYLOAD_BLOCK_NOT_PRESENT: u64 = 0;
@@ -23,7 +24,7 @@ impl Bat {
         let entry_count = bat_bytes.len() / 8;
         let mut entries = Vec::with_capacity(entry_count);
         for i in 0..entry_count {
-            let e = u64::from_le_bytes(bat_bytes[i * 8..i * 8 + 8].try_into().unwrap());
+            let e = le_u64(bat_bytes, i * 8);
             entries.push(e);
         }
         Ok(Self {
