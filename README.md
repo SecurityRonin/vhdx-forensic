@@ -1,16 +1,31 @@
-[![Crates.io](https://img.shields.io/crates/v/vhdx-core.svg)](https://crates.io/crates/vhdx-core)
+# vhdx-forensic
+
+[![Crates.io: vhdx-core](https://img.shields.io/crates/v/vhdx-core.svg?label=vhdx-core)](https://crates.io/crates/vhdx-core)
+[![Crates.io: vhdx-forensic](https://img.shields.io/crates/v/vhdx-forensic.svg?label=vhdx-forensic)](https://crates.io/crates/vhdx-forensic)
 [![Docs.rs](https://img.shields.io/docsrs/vhdx-core)](https://docs.rs/vhdx-core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/SecurityRonin/vhdx-forensic/actions/workflows/ci.yml/badge.svg)](https://github.com/SecurityRonin/vhdx-forensic/actions/workflows/ci.yml)
 [![Sponsor](https://img.shields.io/badge/sponsor-h4x0r-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/h4x0r)
 
-**Pure-Rust VHDX (Hyper-V) virtual-disk container library (reader; writer planned) — dynamic, fixed, differencing, and dirty-log recovery.**
+**Read and audit Hyper-V VHDX disk images in pure Rust — a hardened `Read + Seek` container reader plus a 63-code structural integrity analyzer for DFIR.**
 
-Decodes the Microsoft VHDX container format (Hyper-V, Windows 8+, WSL2, Azure) and exposes a `Read + Seek` interface over the virtual sector stream. Replays dirty logs automatically on open and supports differencing-disk parent chains — zero unsafe code, no C bindings, no external tools required.
+This workspace ships two crates: **`vhdx-core`** — the VHDX/Hyper-V virtual-disk container reader (dynamic, fixed, differencing, automatic dirty-log recovery), exposing a `Read + Seek` view over the virtual sector stream (published as `vhdx-core`, imported as `vhdx`); and **`vhdx-forensic`** — the integrity analyzer that audits the raw bytes for tampering, corruption, and anti-forensic GUID/log wiping, emitting `forensicnomicon::report::Finding` plus optional in-memory CRC repair. Zero unsafe code, no C bindings, no external tools.
 
 ```toml
 [dependencies]
-vhdx-core = "0.2"   # published as vhdx-core, imported as `vhdx`
+vhdx-core = "0.2"       # reader — imported as `vhdx`
+vhdx-forensic = "0.2"   # analyzer — graded structural findings
+```
+
+```rust
+use vhdx_forensic::{anomalies_at_least, Severity, VhdxIntegrity};
+
+let image = std::fs::read("disk.vhdx")?;
+let anomalies = VhdxIntegrity::new(&image).analyse();
+for a in anomalies_at_least(&anomalies, Severity::Error) {
+    println!("[{:?}] {}", a.severity(), a.forensic_significance());
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ---
@@ -91,6 +106,35 @@ Logical sectors:   512 bytes
 | Log replay (dirty-log recovery) | ✓ |
 
 Read-only. Differencing disks require the parent image to be supplied via `VhdxReader::from_bytes_with_parent`. Log replay is applied automatically on open when the active header carries a non-zero LogGuid.
+
+---
+
+## Forensic analysis — `vhdx-forensic`
+
+`VhdxIntegrity::new(&bytes).analyse()` walks the raw container across six phases — container/magic, CRC integrity, header semantics, region layout, metadata, and BAT/data-block analysis — and returns a `Vec<VhdxIntegrityAnomaly>`. It works on raw bytes and does not require a fully valid structure. Each variant carries a stable `code` string, a graded `severity()`, a `forensic_significance()` narrative, and `mitre_techniques()`. There are **63** distinct anomaly codes; a representative sample:
+
+| Code | Severity | Meaning |
+|------|----------|---------|
+| `VHDX-BAD-MAGIC` | Critical | File does not start with the `vhdxfile` signature |
+| `VHDX-BOTH-HEADER-COPIES-INVALID` | Critical | Both header copies fail CRC32C — header recovery impossible |
+| `VHDX-HEADER-CHECKSUM-MISMATCH` | Error | A header copy's stored CRC32C does not match the computed value |
+| `VHDX-REGIONS-OVERLAP` | Error | Two region-table entries claim overlapping container bytes |
+| `VHDX-LOG-ENTRY-CRC-MISMATCH` | Error | A log entry's CRC fails — replay would corrupt the image |
+| `VHDX-BAT-ENTRY-BEYOND-CONTAINER` | Error | A BAT entry points past the end of the file |
+| `VHDX-FILE-WRITE-GUID-ALL-ZEROS` | Warning | FileWriteGuid wiped — consistent with anti-forensic tampering |
+| `VHDX-GHOST-DATA-IN-ABSENT-BLOCK` | Warning | Non-zero payload in a block marked absent — residual/hidden data |
+| `VHDX-DIFFERENCING-DISK` | Warning | Image is a child disk requiring a parent to read |
+| `VHDX-DIRTY-LOG` | Info | Active log present — image was not cleanly closed |
+
+Findings are observations, never legal conclusions — MITRE mappings are surfaced as "consistent with," for the analyst to weigh. `VhdxRepair::new(bytes).attempt_repair()` rebuilds header and region-table CRC32C checksums from a valid peer copy in memory; it never alters payload data.
+
+---
+
+## Trust but verify
+
+- **Panic-free on hostile input.** No `.unwrap()`/`.expect()`/`panic!` or unchecked indexing in production code (`unwrap_used`/`expect_used` are hard `deny` lints). All length, offset, and count fields are bounds-checked before any arithmetic; BAT addressing uses `checked_mul`/`checked_add`.
+- **Fuzzed.** A `cargo-fuzz` workspace exercises the parse and analyse paths; the invariant is "must not panic."
+- **Validated against real artifacts.** Tested against independently produced images from the [log2timeline/dfvfs](https://github.com/log2timeline/dfvfs) corpus and QEMU v11.0.0 output, with virtual disk sizes cross-validated against `qemu-img info`. Detection is proven by injecting corruptions at spec-mandated byte offsets into real QEMU images. See [`forensic/README.md`](forensic/README.md#testing) and [docs/VALIDATION.md](docs/VALIDATION.md).
 
 ---
 

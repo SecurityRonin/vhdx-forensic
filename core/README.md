@@ -1,9 +1,10 @@
 # vhdx-core
 
-[![Crates.io](https://img.shields.io/crates/v/vhdx-core.svg)](https://crates.io/crates/vhdx-core)
+[![Crates.io: vhdx-core](https://img.shields.io/crates/v/vhdx-core.svg?label=vhdx-core)](https://crates.io/crates/vhdx-core)
+[![Crates.io: vhdx-forensic](https://img.shields.io/crates/v/vhdx-forensic.svg?label=vhdx-forensic)](https://crates.io/crates/vhdx-forensic)
 [![Docs.rs](https://img.shields.io/docsrs/vhdx-core)](https://docs.rs/vhdx-core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI](https://github.com/SecurityRonin/vhdx-core/actions/workflows/ci.yml/badge.svg)](https://github.com/SecurityRonin/vhdx-core/actions/workflows/ci.yml)
+[![CI](https://github.com/SecurityRonin/vhdx-forensic/actions/workflows/ci.yml/badge.svg)](https://github.com/SecurityRonin/vhdx-forensic/actions/workflows/ci.yml)
 [![Sponsor](https://img.shields.io/badge/sponsor-h4x0r-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/h4x0r)
 
 **Pure-Rust VHDX (Hyper-V) virtual-disk container library — dynamic, fixed, differencing, and automatic dirty-log recovery.** Decodes the Microsoft VHDX format (Hyper-V, Windows 8+, WSL2, Azure) and hands you a `Read + Seek` view of the virtual sector stream. Zero `unsafe`, no C bindings, no external tools.
@@ -59,4 +60,4 @@ when you need bytes; `vhdx-forensic` when you need findings.
 
 ---
 
-[Privacy Policy](https://securityronin.github.io/vhdx-core/privacy/) · [Terms of Service](https://securityronin.github.io/vhdx-core/terms/) · © 2026 Security Ronin Ltd
+[Privacy Policy](https://securityronin.github.io/vhdx-forensic/privacy/) · [Terms of Service](https://securityronin.github.io/vhdx-forensic/terms/) · © 2026 Security Ronin Ltd
