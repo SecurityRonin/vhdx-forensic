@@ -1,11 +1,11 @@
 [package]
 name = "vhdx-cli"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.85"
+edition.workspace = true
+rust-version.workspace = true
 description = "CLI tool for inspecting VHDX disk images"
-license = "Apache-2.0"
-repository = "https://github.com/SecurityRonin/vhdx-forensic"
+license.workspace = true
+repository.workspace = true
 keywords = ["forensics", "vhdx", "disk-image"]
 categories = ["command-line-utilities"]
 
@@ -14,8 +14,8 @@ name = "vhdx"
 path = "src/main.rs"
 
 [dependencies]
-vhdx = { version = "0.2.0", path = "../core", package = "vhdx-core" }
-clap = { version = "4", features = ["derive"] }
+vhdx = { workspace = true }
+clap = { workspace = true }
 
 [lints]
 workspace = true

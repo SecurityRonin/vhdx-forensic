@@ -1,11 +1,11 @@
 [package]
 name = "vhdx-core"
 version = "0.2.1"
-edition = "2021"
-rust-version = "1.85"
+edition.workspace = true
+rust-version.workspace = true
 description = "Pure-Rust VHDX (Hyper-V) virtual-disk container library — reader (writer planned), hardened for forensic use"
-license = "Apache-2.0"
-repository = "https://github.com/SecurityRonin/vhdx-forensic"
+license.workspace = true
+repository.workspace = true
 homepage = "https://github.com/SecurityRonin/vhdx-forensic"
 documentation = "https://docs.rs/vhdx-core"
 authors = ["Albert Hui"]
@@ -18,10 +18,10 @@ exclude = ["tests/data/"]
 name = "vhdx"
 
 [dependencies]
-thiserror = "2"
+thiserror = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

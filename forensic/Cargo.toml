@@ -1,12 +1,12 @@
 [package]
 name = "vhdx-forensic"
 version = "0.2.0"
-edition = "2021"
-rust-version = "1.85"
+edition.workspace = true
+rust-version.workspace = true
 description = "Forensic integrity analyzer for VHDX (Hyper-V) virtual disks — tamper/anomaly findings and in-memory repair, built on vhdx-core"
 exclude = ["target/", "tests/data/", "fuzz/", "corpus/", "benches/", ".github/"]
-license = "Apache-2.0"
-repository = "https://github.com/SecurityRonin/vhdx-forensic"
+license.workspace = true
+repository.workspace = true
 homepage = "https://github.com/SecurityRonin/vhdx-forensic"
 documentation = "https://docs.rs/vhdx-forensic"
 readme = "README.md"
@@ -14,12 +14,12 @@ keywords = ["forensics", "vhdx", "disk-image", "windows", "container"]
 categories = ["parser-implementations", "filesystem"]
 
 [dependencies]
-forensicnomicon = { version = "0.3.1" }
-thiserror = "2"
-vhdx = { version = "0.2.0", path = "../core", package = "vhdx-core" }
+forensicnomicon = { workspace = true }
+thiserror = { workspace = true }
+vhdx = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

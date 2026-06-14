@@ -1,6 +1,26 @@
 [workspace]
 resolver = "2"
 members = ["core", "forensic", "cli"]
+
+# Single source of truth for fields shared by every member (DRY). Members inherit
+# via `field.workspace = true`. Per-crate `version` is intentionally NOT hoisted:
+# core/forensic/cli are versioned independently.
+[workspace.package]
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/SecurityRonin/vhdx-forensic"
+
+# Single source of truth for dependency versions (DRY): declare each once;
+# members write `dep.workspace = true`. The inter-crate `vhdx` version lives here
+# too (requirement unchanged at 0.2.0), so a bump touches one line.
+[workspace.dependencies]
+vhdx = { path = "core", version = "0.2.0", package = "vhdx-core" }
+thiserror = "2"
+forensicnomicon = "0.3.1"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
