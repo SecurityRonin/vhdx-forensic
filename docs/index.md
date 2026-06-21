@@ -54,7 +54,7 @@ Findings are observations, never legal conclusions — MITRE mappings are surfac
 
 ## Trust but verify
 
-Panic-free on hostile input (no `unwrap`/`expect`/`panic!` or unchecked indexing in production code, hard `deny` lints, bounds-checked length/offset/count fields, `checked_mul`/`checked_add` BAT addressing), fuzzed via a `cargo-fuzz` workspace, and validated against real artifacts from the log2timeline/dfvfs corpus and QEMU output with virtual disk sizes cross-checked against `qemu-img info`. See [Validation](VALIDATION.md).
+Panic-free on hostile input (no `unwrap`/`expect`/`panic!` or unchecked indexing in production code, hard `deny` lints, bounds-checked length/offset/count fields, `checked_mul`/`checked_add` BAT addressing), fuzzed via a `cargo-fuzz` workspace, and validated against real artifacts from the log2timeline/dfvfs corpus and QEMU output with virtual disk sizes cross-checked against `qemu-img info`, with the decoded byte stream verified byte-identical to `qemu-img convert -O raw`. See [Validation](validation.md).
 
 See the project [README](https://github.com/SecurityRonin/vhdx-forensic) for the full usage guide, CLI, and related-crate map.
 

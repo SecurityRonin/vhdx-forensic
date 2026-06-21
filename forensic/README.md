@@ -149,16 +149,16 @@ The forensic crate ships a suite of integration tests across nine test files. Re
 | [log2timeline/dfvfs](https://github.com/log2timeline/dfvfs) corpus | `ext2.vhdx`, `fat-parent.vhdx`, `fat-differential.vhdx`, `ext2.vhd` | Doer-checker: images built by a separate tool verify our parser against independently created data |
 | QEMU v11.0.0 (Homebrew) | `qemu_empty_dynamic.vhdx`, `qemu_fixed.vhdx` | Zero-FP baseline and injection tests; virtual disk sizes cross-validated with `qemu-img info` |
 
-Detection capability is verified by injecting corruptions at spec-mandated byte offsets (§2.0) into real QEMU images, then asserting the expected anomaly variant is detected. This proves detection on real images independently of our builder code.
+The decoded virtual byte stream is verified **byte-identical to `qemu-img convert -O raw`** (an independent C codebase) on the committed corpus — the load-bearing correctness oracle. Detection capability is verified by injecting corruptions at spec-mandated MS-VHDX §2.0 byte offsets into real QEMU images, then asserting the expected anomaly variant is detected — independently of our builder code.
 
-See [docs/VALIDATION.md](docs/VALIDATION.md) for the full validation report including per-image field cross-validation and detection test results.
+See the [validation report](https://securityronin.github.io/vhdx-forensic/validation/) ([source](../docs/validation.md)) for the full per-capability evidence, oracle/corpus tables, and documented gaps.
 
 ## Related
 
 - [`vhdx-core`](https://crates.io/crates/vhdx-core) — Pure-Rust VHDX container reader (published as `vhdx-core`, imported as `vhdx`); the reader layer this crate depends on
 - [`ewf`](https://crates.io/crates/ewf) — EWF/E01 container reader; pairs with this crate in the Issen stack
 - [`ewf-forensic`](https://crates.io/crates/ewf-forensic) — Integrity auditor and Adler-32 repair for EWF images; the EWF counterpart to this crate
-- [libvhdi](https://github.com/libyal/libvhdi) — C-based VHDX/VHD reader (LGPL); the independent reference implementation we validate against
+- [libvhdi](https://github.com/libyal/libvhdi) — C-based VHDX/VHD reader (LGPL); a candidate independent forensic-analysis oracle (a `libvhdi` differential is a documented validation gap, see the [validation report](https://securityronin.github.io/vhdx-forensic/validation/))
 
 ---
 

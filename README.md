@@ -134,7 +134,7 @@ Findings are observations, never legal conclusions — MITRE mappings are surfac
 
 - **Panic-free on hostile input.** No `.unwrap()`/`.expect()`/`panic!` or unchecked indexing in production code (`unwrap_used`/`expect_used` are hard `deny` lints). All length, offset, and count fields are bounds-checked before any arithmetic; BAT addressing uses `checked_mul`/`checked_add`.
 - **Fuzzed.** A `cargo-fuzz` workspace exercises the parse and analyse paths; the invariant is "must not panic."
-- **Validated against real artifacts.** Tested against independently produced images from the [log2timeline/dfvfs](https://github.com/log2timeline/dfvfs) corpus and QEMU v11.0.0 output, with virtual disk sizes cross-validated against `qemu-img info`. Detection is proven by injecting corruptions at spec-mandated byte offsets into real QEMU images. See [`forensic/README.md`](forensic/README.md#testing) and [docs/VALIDATION.md](docs/VALIDATION.md).
+- **Validated against real artifacts.** Tested against independently produced images from the [log2timeline/dfvfs](https://github.com/log2timeline/dfvfs) corpus and QEMU v11.0.0 output. The decoded byte stream is verified **byte-identical to `qemu-img convert -O raw`** (an independent C codebase), and virtual disk sizes are cross-validated against `qemu-img info`. Detection is proven by injecting corruptions at spec-mandated MS-VHDX §2.0 byte offsets into real QEMU images. See the [validation report](https://securityronin.github.io/vhdx-forensic/validation/) ([source](docs/validation.md)).
 
 ---
 
