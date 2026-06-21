@@ -4,7 +4,7 @@ use vhdx::VhdxReader;
 
 fn data(name: &str) -> Vec<u8> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data")
+        .join("../tests/data")
         .join(name);
     std::fs::read(&path).unwrap_or_else(|_| panic!("test data missing: {}", path.display()))
 }

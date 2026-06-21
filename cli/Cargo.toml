@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["forensics", "vhdx", "disk-image"]
 categories = ["command-line-utilities"]
+exclude = ["tests/"]
 
 [[bin]]
 name = "vhdx"

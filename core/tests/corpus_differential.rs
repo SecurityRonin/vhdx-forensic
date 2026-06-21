@@ -77,18 +77,18 @@ fn corpus_vhdx_matches_qemu_raw(corpus: &Path) {
 
 #[test]
 fn corpus_ext2_vhdx_matches_qemu_raw() {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/ext2.vhdx");
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/ext2.vhdx");
     corpus_vhdx_matches_qemu_raw(&p);
 }
 
 #[test]
 fn corpus_qemu_fixed_vhdx_matches_qemu_raw() {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/qemu_fixed.vhdx");
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/qemu_fixed.vhdx");
     corpus_vhdx_matches_qemu_raw(&p);
 }
 
 #[test]
 fn corpus_fat_parent_vhdx_matches_qemu_raw() {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/fat-parent.vhdx");
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/fat-parent.vhdx");
     corpus_vhdx_matches_qemu_raw(&p);
 }

@@ -12,7 +12,7 @@ authors = ["Albert Hui"]
 keywords = ["forensics", "vhdx", "disk-image", "windows", "hyper-v"]
 categories = ["parser-implementations", "filesystem"]
 readme = "README.md"
-exclude = ["tests/data/"]
+exclude = ["tests/"]
 
 [lib]
 name = "vhdx"

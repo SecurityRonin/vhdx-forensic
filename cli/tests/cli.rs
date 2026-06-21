@@ -7,7 +7,7 @@ fn vhdx_bin() -> Command {
 
 fn data_path(name: &str) -> String {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data")
+        .join("../tests/data")
         .join(name)
         .to_string_lossy()
         .into_owned()

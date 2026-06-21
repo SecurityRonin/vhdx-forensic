@@ -7,7 +7,7 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-const DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
+const DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data");
 
 // ── qemu_empty_dynamic.vhdx (QEMU v11, 16 MiB virtual, dynamic) ──────────────
 
