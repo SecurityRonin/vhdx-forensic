@@ -1,9 +1,12 @@
+use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use crate::backing::Backing;
 use crate::bat::Bat;
 use crate::error::{Result, VhdxError};
 use crate::header::{parse_active_header, REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET};
+use crate::log::LogOverlay;
 use crate::metadata::{parse_metadata, VhdxMetadata};
 use crate::region::parse_region_table;
 use crate::FILE_MAGIC;
@@ -11,59 +14,151 @@ use crate::FILE_MAGIC;
 /// Read-only VHDX container reader.
 ///
 /// Implements `Read + Seek` over the virtual sector stream.
+///
+/// # Bounded memory
+/// The reader holds the BAT (a small `Vec<u64>`), the parsed metadata, and a
+/// log overlay (empty for a clean image, ~log-sized for a dirty one) — never the
+/// whole container. Block bytes are fetched on demand from a positioned
+/// [`Backing`], so peak RSS does not scale with image size. [`VhdxReader::open`]
+/// takes the bounded [`Backing::File`] path; [`VhdxReader::from_bytes`] keeps the
+/// legacy in-RAM path (backed by [`Backing::Mem`]).
 #[derive(Debug)]
 pub struct VhdxReader {
-    data: Vec<u8>,
+    backing: Backing,
+    overlay: LogOverlay,
     bat: Bat,
     meta: VhdxMetadata,
     pos: u64,
     parent: Option<Box<VhdxReader>>,
 }
 
+/// Minimum container size: covers magic, both headers, and both region tables.
+const MIN_CONTAINER_SIZE: u64 = 0x0025_0000;
+
 impl VhdxReader {
+    /// Open a VHDX container from a path with **bounded** memory.
+    ///
+    /// Reads only the small fixed structures (headers, region table, metadata,
+    /// BAT, and — for a dirty image — the log region) at construction; the
+    /// payload blocks are read on demand. A 2 TB image no longer means a 2 TB
+    /// heap.
     pub fn open(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path)?;
-        Self::from_bytes(data)
+        let file = File::open(path)?;
+        Self::from_backing(Backing::File(file), None)
     }
 
-    /// Minimum container size: covers magic, both headers, and both region tables.
-    const MIN_CONTAINER_SIZE: u64 = 0x0025_0000;
+    /// Construct a reader over an arbitrary positioned [`Backing`].
+    ///
+    /// The escape hatch behind [`open`](Self::open) (and the issen zip bridge):
+    /// a [`Backing::Sub`] reads a STORED zip entry in place, a [`Backing::Mem`]
+    /// reads inflated/owned bytes. Parsing and reads are identical across all
+    /// three backings.
+    pub fn from_backing(backing: Backing, parent: Option<Box<VhdxReader>>) -> Result<Self> {
+        Self::parse_backing(backing, parent)
+    }
 
+    /// Open a VHDX container from owned bytes (legacy in-RAM path).
+    ///
+    /// The whole buffer is held in RAM (via [`Backing::Mem`]) and the dirty log,
+    /// if any, is replayed in place before parsing — byte-identical to the
+    /// historical behaviour. Prefer [`open`](Self::open) for files on disk.
     pub fn from_bytes(data: Vec<u8>) -> Result<Self> {
-        Self::parse(data, None)
+        Self::parse_bytes(data, None)
     }
 
-    /// Open a differencing (child) disk with its parent chain.
+    /// Open a differencing (child) disk with its parent chain (in-RAM path).
     ///
     /// Reads absent blocks from `parent` instead of returning zeros.
     pub fn from_bytes_with_parent(data: Vec<u8>, parent: VhdxReader) -> Result<Self> {
-        Self::parse(data, Some(Box::new(parent)))
+        Self::parse_bytes(data, Some(Box::new(parent)))
     }
 
-    fn parse(mut data: Vec<u8>, parent: Option<Box<VhdxReader>>) -> Result<Self> {
+    /// Open a differencing (child) disk over an arbitrary backing with its
+    /// parent chain.
+    pub fn from_backing_with_parent(backing: Backing, parent: VhdxReader) -> Result<Self> {
+        Self::parse_backing(backing, Some(Box::new(parent)))
+    }
+
+    /// In-RAM parse: replay the log in place, then parse from the buffer and
+    /// keep it as the [`Backing::Mem`].
+    fn parse_bytes(mut data: Vec<u8>, parent: Option<Box<VhdxReader>>) -> Result<Self> {
         if data.len() < 8 || &data[0..8] != FILE_MAGIC {
             return Err(VhdxError::BadMagic);
         }
-        if (data.len() as u64) < Self::MIN_CONTAINER_SIZE {
-            return Err(VhdxError::ContainerTooSmall(Self::MIN_CONTAINER_SIZE));
+        if (data.len() as u64) < MIN_CONTAINER_SIZE {
+            return Err(VhdxError::ContainerTooSmall(MIN_CONTAINER_SIZE));
         }
         crate::log::apply(&mut data)?;
-        let _header = parse_active_header(&data)?;
-        let regions = parse_region_table(&data, REGION_TABLE1_OFFSET as usize)
-            .or_else(|_| parse_region_table(&data, REGION_TABLE2_OFFSET as usize))?;
-        let meta = parse_metadata(&data, regions.metadata.file_offset, regions.metadata.length)?;
+        // The log is already folded into `data`, so the overlay is empty and
+        // the backing serves the committed bytes directly.
+        let backing = Backing::from_bytes(data);
+        Self::assemble(backing, LogOverlay::default(), parent)
+    }
+
+    /// Bounded parse: read the small fixed structures via positioned reads, then
+    /// build the log overlay (empty for a clean image).
+    fn parse_backing(backing: Backing, parent: Option<Box<VhdxReader>>) -> Result<Self> {
+        let mut magic = [0u8; 8];
+        let n = backing.read_at(&mut magic, 0)?;
+        if n < 8 || &magic != FILE_MAGIC {
+            return Err(VhdxError::BadMagic);
+        }
+        if backing.len() < MIN_CONTAINER_SIZE {
+            return Err(VhdxError::ContainerTooSmall(MIN_CONTAINER_SIZE));
+        }
+        let overlay = {
+            // The header lives in the first 1 MB; read that slice to select the
+            // active header and (if dirty) drive the log overlay.
+            let head = backing.read_exact_at(0, MIN_CONTAINER_SIZE as usize)?;
+            let header = parse_active_header(&head)?;
+            crate::log::build_overlay(&backing, &header)?
+        };
+        Self::assemble(backing, overlay, parent)
+    }
+
+    /// Shared tail: parse region table → metadata → BAT from small positioned
+    /// reads (the overlay patches any log-dirtied structure bytes), validate,
+    /// and assemble the reader.
+    fn assemble(
+        backing: Backing,
+        overlay: LogOverlay,
+        parent: Option<Box<VhdxReader>>,
+    ) -> Result<Self> {
+        // Region tables sit at fixed offsets within the first 1 MB; read that
+        // prefix once (small, bounded) and parse the region table from it,
+        // applying the log overlay so a log-patched region table is honoured.
+        let mut head = backing.read_exact_at(0, MIN_CONTAINER_SIZE as usize)?;
+        overlay.patch(&mut head, 0);
+
+        let container_len = backing.len();
+        let regions = parse_region_table(&head, REGION_TABLE1_OFFSET as usize, container_len)
+            .or_else(|_| parse_region_table(&head, REGION_TABLE2_OFFSET as usize, container_len))?;
+
+        // Metadata + BAT can live past the first 1 MB; read each region by its
+        // own offset/length and patch with the overlay.
+        let meta_region = read_region(
+            &backing,
+            &overlay,
+            regions.metadata.file_offset,
+            regions.metadata.length,
+        )?;
+        let meta = parse_metadata(&meta_region, 0, regions.metadata.length)?;
         meta.validate()?;
         if meta.has_parent && parent.is_none() {
             return Err(VhdxError::DifferencingNotSupported);
         }
-        let bat = Bat::parse(
-            &data,
+
+        let bat_region = read_region(
+            &backing,
+            &overlay,
             regions.bat.file_offset,
             regions.bat.length,
-            meta.clone(),
         )?;
+        let bat = Bat::parse(&bat_region, 0, regions.bat.length, meta.clone())?;
+
         Ok(Self {
-            data,
+            backing,
+            overlay,
             bat,
             meta,
             pos: 0,
@@ -78,6 +173,29 @@ impl VhdxReader {
     pub fn logical_sector_size(&self) -> u32 {
         self.meta.logical_sector_size
     }
+}
+
+/// Read a region `[file_offset, file_offset+length)` from the backing into a
+/// fresh buffer and apply the log overlay, so region/metadata/BAT parsing sees
+/// the committed state — exactly as the in-place `apply` path would.
+///
+/// The returned buffer is offset-zero based, so callers parse with offset `0`.
+fn read_region(
+    backing: &Backing,
+    overlay: &LogOverlay,
+    file_offset: u64,
+    length: u32,
+) -> Result<Vec<u8>> {
+    let end = file_offset.saturating_add(u64::from(length));
+    if backing.len() < end {
+        return Err(VhdxError::OffsetOutOfBounds);
+    }
+    let mut buf = backing.read_exact_at(file_offset, length as usize)?;
+    if buf.len() < length as usize {
+        return Err(VhdxError::OffsetOutOfBounds);
+    }
+    overlay.patch(&mut buf, file_offset);
+    Ok(buf)
 }
 
 impl Read for VhdxReader {
@@ -97,15 +215,16 @@ impl Read for VhdxReader {
 
             match self.bat.file_offset_for_byte(virtual_byte) {
                 Ok(file_off) => {
-                    let src_end = (file_off as usize).saturating_add(this_chunk);
-                    if src_end > self.data.len() {
+                    let dst = &mut buf[written..written + this_chunk];
+                    let n = self.backing.read_at(dst, file_off)?;
+                    if n < this_chunk {
                         return Err(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
                             "VHDX data truncated",
                         ));
                     }
-                    buf[written..written + this_chunk]
-                        .copy_from_slice(&self.data[file_off as usize..src_end]);
+                    // Fold any committed-log sectors over the on-disk block.
+                    self.overlay.patch(dst, file_off);
                 }
                 Err(VhdxError::BlockNotPresent(_)) => {
                     if let Some(ref mut p) = self.parent {

@@ -12,6 +12,7 @@
 //! CONTAINER — equivalent role to `ewf` for E01 images.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod backing;
 mod bat;
 mod bytes;
 mod error;
@@ -21,6 +22,7 @@ pub mod metadata;
 mod reader;
 pub mod region;
 
+pub use backing::Backing;
 pub use error::{Result, VhdxError};
 pub use reader::VhdxReader;
 

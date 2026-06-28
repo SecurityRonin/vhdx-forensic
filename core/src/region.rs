@@ -40,7 +40,14 @@ pub struct RegionTable {
 /// a crafted `entry_count = u32::MAX` from iterating over a large file.
 const REGION_ENTRY_COUNT_MAX: usize = 2048;
 
-pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
+/// Parse a region table from the slice `data` at byte `offset`.
+///
+/// `container_len` is the size of the WHOLE container (not the slice), used to
+/// range-check each region's `file_offset + length`. The bounded reader parses
+/// the region table from a small 1 MB prefix while the regions themselves live
+/// further into a multi-gigabyte image, so the bound must be the container size,
+/// never `data.len()`.
+pub fn parse_region_table(data: &[u8], offset: usize, container_len: u64) -> Result<RegionTable> {
     if data.len() < offset + 16 {
         return Err(VhdxError::InvalidRegionTable);
     }
@@ -56,7 +63,6 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
         return Err(VhdxError::InvalidRegionTable);
     }
     let entry_count = (le_u32(slice, 8) as usize).min(REGION_ENTRY_COUNT_MAX);
-    let container_len = data.len();
     let mut bat: Option<RegionEntry> = None;
     let mut metadata: Option<RegionEntry> = None;
     for i in 0..entry_count {
@@ -71,7 +77,7 @@ pub fn parse_region_table(data: &[u8], offset: usize) -> Result<RegionTable> {
         let region_end = file_offset
             .checked_add(u64::from(length))
             .ok_or(VhdxError::OffsetOutOfBounds)?;
-        if region_end as usize > container_len {
+        if region_end > container_len {
             return Err(VhdxError::OffsetOutOfBounds);
         }
         let entry = RegionEntry {
