@@ -17,7 +17,7 @@ repository = "https://github.com/SecurityRonin/vhdx-forensic"
 [workspace.dependencies]
 vhdx = { path = "core", version = "0.3.0", package = "vhdx-core" }
 thiserror = "2"
-forensicnomicon = "0.3.1"
+forensicnomicon = "1"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 
