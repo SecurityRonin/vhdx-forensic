@@ -24,6 +24,7 @@ This file is indexed by the fleet catalog at `issen/docs/corpus-catalog.md`.
 | `ext2.vhd` | REAL-ext | 2 MiB | log2timeline/dfvfs | Apache-2.0 | `c424cc6810d10d4326e77060803170c7` | `225f16a8d65ba442fbd9958606b60bb6001b33be024b90661baffd67f3210230` |
 | `qemu_empty_dynamic.vhdx` | SYNTHETIC | 8 MiB | Generated (QEMU 11.0.0) | N/A | `ca31c1c2fac6f023ab8fdc85b86293bc` | `9538ddee49e5d213564d3356b5ebc5422d08e4cdd96b868c28ab67951f6160af` |
 | `qemu_fixed.vhdx` | SYNTHETIC | 16 MiB | Generated (QEMU 11.0.0) | N/A | `2504bd10c801769a2328a0c0b92d0c82` | `918b40b57e9b2302e6c178fa6141cd6da369231d8e3a42a955f4840d27acee71` |
+| `fat.vhdx` | SYNTHETIC | 16 MiB | Generated (QEMU 11.0.2) | N/A | `41a87cf52d33855859070f4e38bd42fa` | — |
 
 ## Real third-party fixtures (log2timeline/dfvfs — Apache-2.0)
 
@@ -74,3 +75,23 @@ qemu-img create -f vhdx -o subformat=fixed qemu_fixed.vhdx 8M
 Fixed-provisioning VHDX, 8 MiB virtual size, all BAT entries FULLY PRESENT — a
 structurally different BAT layout from dynamic images. Used by
 `core/tests/real_images.rs` and `forensic/tests/real_images.rs`.
+
+### fat.vhdx
+- **Class**: SYNTHETIC
+- **Tool**: qemu-img 11.0.2 (Homebrew)
+- **MD5**: `41a87cf52d33855859070f4e38bd42fa`
+- **Round-trip oracle SHA-256** (qemu decoded `fat.vhdx` → `roundtrip.raw`):
+  `f350908d5b99b0000f7bd4235ce841db1ee82c809f9fe9a19040257ec1eff4ed`
+- **Virtual size**: 8 MiB (8,388,608 bytes)
+- **Contents**: FAT16 filesystem with volume label `VHDXTEST`; MBR at sector 0
+  (boot signature `0x55 0xAA` at virtual offset 510); FAT16 boot sector at
+  offset 512 (`VHDXTEST` label at virtual offset 555 = 0x22B).
+- **Used by**: `core/tests/vfs_image_source.rs` — the `open_reader` / `ImageSource` integration tests.
+- **Generator commands** (verbatim):
+```
+hdiutil create -size 8m -fs "MS-DOS FAT16" -volname VHDXTEST /tmp/fat16img
+hdiutil convert /tmp/fat16img.dmg -format UDTO -o /tmp/fat16img_raw
+qemu-img convert -f raw -O vhdx /tmp/fat16img_raw.cdr /tmp/fat.vhdx       # oracle encoder
+qemu-img convert -f vhdx -O raw /tmp/fat.vhdx /tmp/roundtrip.raw          # oracle decoder → ground truth
+sha256sum /tmp/roundtrip.raw   # f350908d5b99b0000f7bd4235ce841db1ee82c809f9fe9a19040257ec1eff4ed
+```
