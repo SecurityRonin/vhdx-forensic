@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::backing::Backing;
+use crate::backing::{Backing, ReadSeekSend};
 use crate::bat::Bat;
 use crate::error::{Result, VhdxError};
 use crate::header::{parse_active_header, REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET};
@@ -77,6 +77,32 @@ impl VhdxReader {
     /// parent chain.
     pub fn from_backing_with_parent(backing: Backing, parent: VhdxReader) -> Result<Self> {
         Self::parse_backing(backing, Some(Box::new(parent)))
+    }
+
+    /// Open a VHDX container from any boxed `Read + Seek + Send` reader.
+    ///
+    /// This is the entry point used by the forensic-vfs engine, which hands a
+    /// `SourceCursor` (a `Read + Seek + Send`) to the reader. The `len` is
+    /// determined once at construction by seeking to the end of the reader;
+    /// subsequent `read_at` calls lock a mutex, seek, and read — no mmap,
+    /// no unsafe, fully `forbid(unsafe)` compliant.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`open`](Self::open): [`VhdxError::BadMagic`]
+    /// if the stream does not start with the VHDX file magic, and
+    /// [`VhdxError::ContainerTooSmall`] if the stream is shorter than the
+    /// minimum VHDX container size.
+    pub fn open_reader(mut reader: Box<dyn ReadSeekSend>) -> Result<Self> {
+        // Measure the length once up front by seeking to the end. A seek error
+        // here is surfaced as an I/O error wrapped in VhdxError.
+        let len = reader
+            .seek(std::io::SeekFrom::End(0))
+            .map_err(VhdxError::Io)?;
+        reader
+            .seek(std::io::SeekFrom::Start(0))
+            .map_err(VhdxError::Io)?;
+        let inner = std::sync::Mutex::new(reader);
+        Self::from_backing(Backing::Reader { inner, len }, None)
     }
 
     /// In-RAM parse: replay the log in place, then parse from the buffer and

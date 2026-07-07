@@ -1,4 +1,15 @@
-//! Integration test: VhdxReader composes as an ImageSource via forensic-vfs.
+//! Integration test: VhdxReader::open_reader composes as a forensic-vfs ImageSource.
+// Integration tests are separate crates; the lib's cfg_attr(test, allow(unwrap_used))
+// does not apply here. Suppress pedantic lints that are normal in test helpers.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::needless_range_loop,
+    clippy::many_single_char_names,
+    clippy::unreadable_literal,
+    clippy::items_after_statements,
+    clippy::doc_markdown
+)]
 //!
 //! Oracle: qemu-img 11.0.2 encoded `tests/data/fat.vhdx` from a FAT16 raw image
 //! and decoded it back to `roundtrip.raw`. The SHA-256 of `roundtrip.raw` is the
@@ -7,6 +18,13 @@
 //! The test exercises the exact call path the forensic-vfs engine uses:
 //!   `VhdxReader::open_reader(Box::new(Cursor::new(...)))` → `SeekPoolSource::single`.
 //!
+//! `SeekPoolSource` is NOT in the published `forensic-vfs 0.1.0` (it was added
+//! in a later local commit). We test `ImageSource` type-compatibility here via
+//! `forensic_vfs::ImageSource` and the manual `DynWrapper` below, matching the
+//! engine's wrapped usage, while the SHA-256 / sector assertions are made directly
+//! via `VhdxReader`'s own `Read + Seek` interface (which is what the engine
+//! also wraps in SeekPoolSource).
+//!
 //! Generator commands (verbatim, for reproduction):
 //!   hdiutil create -size 8m -fs "MS-DOS FAT16" -volname VHDXTEST /tmp/fat16img
 //!   hdiutil convert /tmp/fat16img.dmg -format UDTO -o /tmp/fat16img_raw
@@ -14,11 +32,10 @@
 //!   qemu-img convert -f vhdx -O raw /tmp/fat.vhdx /tmp/roundtrip.raw
 //!   qemu-img --version  →  qemu-img version 11.0.2
 
-use std::io::Cursor;
-use std::sync::Arc;
+use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::sync::{Arc, Mutex};
 
-use forensic_vfs::adapters::SeekPoolSource;
-use forensic_vfs::ImageSource;
+use forensic_vfs::{ImageSource, SourceId};
 
 /// SHA-256 of the round-trip raw produced by qemu-img (the independent oracle).
 /// qemu encoded fat.vhdx, qemu decoded it back — neither value was authored by us.
@@ -28,7 +45,6 @@ const ROUNDTRIP_SHA256: &str = "f350908d5b99b0000f7bd4235ce841db1ee82c809f9fe9a1
 const VIRTUAL_DISK_SIZE: u64 = 8 * 1024 * 1024; // 8 MiB
 
 /// Offset of the MBR boot signature (0x55 0xAA) within the virtual disk.
-/// The MBR lives at sector 0; the signature is at the last two bytes of that sector.
 const MBR_BOOT_SIG_OFFSET: u64 = 510;
 
 /// Offset of the VHDXTEST volume label within the virtual disk.
@@ -40,8 +56,62 @@ const VHDXTEST_LABEL_OFFSET: u64 = 555;
 /// encoded by qemu-img 11.0.2 from an 8 MiB raw image.
 static FAT_VHDX: &[u8] = include_bytes!("../../tests/data/fat.vhdx");
 
+// ---------------------------------------------------------------------------
+// A thin `ImageSource` wrapper so we can verify the `VhdxReader` type satisfies
+// the `ImageSource` contract via `Arc<dyn ImageSource>` — the shape the engine uses.
+// ---------------------------------------------------------------------------
+
+/// Wraps a `Read + Seek` reader as an `ImageSource` using a mutex — the same
+/// technique `SeekPoolSource::single` uses in the engine.
+struct DynWrapper<R: Read + Seek + Send> {
+    inner: Mutex<R>,
+    len: u64,
+}
+
+impl<R: Read + Seek + Send> DynWrapper<R> {
+    fn new(mut reader: R) -> Self {
+        let len = reader.seek(SeekFrom::End(0)).unwrap();
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        Self {
+            inner: Mutex::new(reader),
+            len,
+        }
+    }
+}
+
+impl<R: Read + Seek + Send + 'static> ImageSource for DynWrapper<R> {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> forensic_vfs::VfsResult<usize> {
+        let io_err = |op: &'static str| {
+            move |source: std::io::Error| forensic_vfs::VfsError::Io { op, source }
+        };
+        let avail = self.len.saturating_sub(offset);
+        if avail == 0 {
+            return Ok(0);
+        }
+        let want = (buf.len() as u64).min(avail) as usize;
+        let mut g = self.inner.lock().unwrap();
+        g.seek(SeekFrom::Start(offset)).map_err(io_err("seek"))?;
+        let mut total = 0;
+        while total < want {
+            match g.read(&mut buf[total..want]).map_err(io_err("read"))? {
+                0 => break,
+                n => total += n,
+            }
+        }
+        Ok(total)
+    }
+
+    fn source_id(&self) -> SourceId {
+        SourceId::ROOT
+    }
+}
+
 /// Open via `open_reader` and confirm `virtual_disk_size` is reported correctly,
-/// `SeekPoolSource::single` wraps it, and `ImageSource::len` matches.
+/// and the reader composes as `Arc<dyn ImageSource>` with matching `len`.
 #[test]
 fn open_reader_reports_correct_virtual_size() {
     let reader = vhdx::VhdxReader::open_reader(Box::new(Cursor::new(FAT_VHDX.to_vec())))
@@ -49,7 +119,9 @@ fn open_reader_reports_correct_virtual_size() {
     let vsize = reader.virtual_disk_size();
     assert_eq!(vsize, VIRTUAL_DISK_SIZE, "virtual disk size mismatch");
 
-    let src: Arc<dyn ImageSource> = Arc::new(SeekPoolSource::single(reader, vsize));
+    // Wrap the reader as an ImageSource via our DynWrapper (same mutex pattern
+    // that SeekPoolSource::single uses in the engine).
+    let src: Arc<dyn ImageSource> = Arc::new(DynWrapper::new(reader));
     assert_eq!(
         src.len(),
         VIRTUAL_DISK_SIZE,
@@ -57,15 +129,14 @@ fn open_reader_reports_correct_virtual_size() {
     );
 }
 
-/// Read the MBR boot signature sector — the canonical FAT/MBR marker.
-/// This is a Tier-1 assertion: the offset and expected bytes were read from the
-/// qemu round-trip raw, not from this reader.
+/// Read the MBR boot signature — canonical FAT/MBR marker at virtual offset 510.
+/// Tier-1 assertion: offset and expected bytes come from the qemu round-trip raw.
 #[test]
 fn read_at_returns_mbr_boot_signature() {
     let reader = vhdx::VhdxReader::open_reader(Box::new(Cursor::new(FAT_VHDX.to_vec())))
         .expect("open_reader must succeed");
     let vsize = reader.virtual_disk_size();
-    let src: Arc<dyn ImageSource> = Arc::new(SeekPoolSource::single(reader, vsize));
+    let src: Arc<dyn ImageSource> = Arc::new(DynWrapper::new(reader));
 
     let mut sector = [0u8; 512];
     let n = src.read_at(0, &mut sector).expect("read sector 0");
@@ -75,69 +146,57 @@ fn read_at_returns_mbr_boot_signature() {
         &[0x55, 0xAA],
         "MBR boot signature not found at offset {MBR_BOOT_SIG_OFFSET}"
     );
+    let _ = vsize;
 }
 
-/// Read the FAT16 volume label — confirms the right bytes from the oracle image
-/// are decoded faithfully.
+/// Read the FAT16 volume label — confirms right bytes from the oracle image decode faithfully.
 #[test]
 fn read_at_finds_vhdxtest_label() {
     let reader = vhdx::VhdxReader::open_reader(Box::new(Cursor::new(FAT_VHDX.to_vec())))
         .expect("open_reader must succeed");
     let vsize = reader.virtual_disk_size();
-    let src: Arc<dyn ImageSource> = Arc::new(SeekPoolSource::single(reader, vsize));
+    let src: Arc<dyn ImageSource> = Arc::new(DynWrapper::new(reader));
 
     let mut buf = [0u8; 8];
     let n = src
         .read_at(VHDXTEST_LABEL_OFFSET, &mut buf)
-        .expect("read label sector");
-    assert_eq!(n, 8, "label read returned wrong byte count");
+        .expect("read label");
+    assert_eq!(n, 8);
     assert_eq!(&buf, b"VHDXTEST", "FAT16 volume label mismatch");
+    let _ = vsize;
 }
 
-/// Read the whole virtual disk, SHA-256 it, and compare against the qemu oracle.
-/// The sha256 constant was produced by `sha256sum /tmp/roundtrip.raw` where
-/// roundtrip.raw was decoded by qemu-img from the committed fat.vhdx — fully
-/// independent of this reader.
+/// Read the whole virtual disk, SHA-256 it, compare against the qemu oracle.
+/// The constant was produced by `sha256sum /tmp/roundtrip.raw` where roundtrip.raw
+/// was decoded by qemu-img from the committed fat.vhdx — independent of this reader.
 #[test]
 fn full_read_sha256_matches_oracle() {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let reader = vhdx::VhdxReader::open_reader(Box::new(Cursor::new(FAT_VHDX.to_vec())))
+    let mut reader = vhdx::VhdxReader::open_reader(Box::new(Cursor::new(FAT_VHDX.to_vec())))
         .expect("open_reader must succeed");
-    let vsize = reader.virtual_disk_size() as usize;
-    let src: Arc<dyn ImageSource> = Arc::new(SeekPoolSource::single(reader, vsize as u64));
 
-    // Drain the full virtual disk via ImageSource::read_at in 1 MiB chunks.
-    let mut hasher = Sha256::new();
-    let mut offset: u64 = 0;
-    let mut chunk = vec![0u8; 1024 * 1024];
-    loop {
-        let remaining = (vsize as u64).saturating_sub(offset) as usize;
-        if remaining == 0 {
-            break;
-        }
-        let want = remaining.min(chunk.len());
-        let n = src.read_at(offset, &mut chunk[..want]).expect("read chunk");
-        if n == 0 {
-            break;
-        }
-        hasher.update(&chunk[..n]);
-        offset += n as u64;
-    }
-    let digest = hex_lower(&hasher.finalize());
+    reader.seek(SeekFrom::Start(0)).unwrap();
+    let mut all = Vec::with_capacity(VIRTUAL_DISK_SIZE as usize);
+    reader.read_to_end(&mut all).unwrap();
+    assert_eq!(
+        all.len(),
+        VIRTUAL_DISK_SIZE as usize,
+        "read_to_end length mismatch"
+    );
+
+    let digest = hex_lower(&sha256(&all));
     assert_eq!(
         digest, ROUNDTRIP_SHA256,
         "SHA-256 of full virtual disk does not match qemu oracle"
     );
 }
 
-/// A read that starts entirely past EOF must return 0 — not an error, not a panic.
+/// A read that starts entirely past EOF via ImageSource must return 0.
 #[test]
 fn read_past_eof_returns_zero() {
     let reader = vhdx::VhdxReader::open_reader(Box::new(Cursor::new(FAT_VHDX.to_vec())))
         .expect("open_reader must succeed");
     let vsize = reader.virtual_disk_size();
-    let src: Arc<dyn ImageSource> = Arc::new(SeekPoolSource::single(reader, vsize));
+    let src: Arc<dyn ImageSource> = Arc::new(DynWrapper::new(reader));
 
     let mut buf = [0xFFu8; 512];
     let n = src
@@ -147,69 +206,41 @@ fn read_past_eof_returns_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal SHA-256 accumulator — avoids adding sha2 as a dev-dep; uses only
-// the primitives already available via std (none). We use a hand-rolled
-// condensed version purely for the test constant comparison.
-//
-// NOTE: This is the standard SHA-256, not a custom algorithm — it is only
-// here to avoid an extra dev-dependency. Do NOT copy this pattern for
-// production code; use the sha2 crate there.
+// Minimal SHA-256 — avoids adding sha2 as a dev-dep. Standard algorithm only;
+// do NOT copy for production code — use the sha2 crate there.
 // ---------------------------------------------------------------------------
 
-struct Sha256 {
-    state: [u32; 8],
-    buf: [u8; 64],
-    buf_len: usize,
-    bit_len: u64,
-}
-
-impl Sha256 {
-    fn new() -> Self {
-        Self {
-            state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-                0x5be0cd19,
-            ],
-            buf: [0u8; 64],
-            buf_len: 0,
-            bit_len: 0,
-        }
+fn sha256(data: &[u8]) -> [u8; 32] {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let mut state: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    let bit_len = (data.len() as u64) * 8;
+    // Pad: append 0x80, then zeros, then the 64-bit big-endian bit length.
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
     }
+    msg.extend_from_slice(&bit_len.to_be_bytes());
 
-    fn update(&mut self, data: &[u8]) {
-        for &b in data {
-            self.buf[self.buf_len] = b;
-            self.buf_len += 1;
-            if self.buf_len == 64 {
-                self.compress();
-                self.buf_len = 0;
-            }
-        }
-        self.bit_len += (data.len() as u64) * 8;
-    }
-
-    fn compress(&mut self) {
-        const K: [u32; 64] = [
-            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-            0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-            0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-            0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-            0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-            0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-            0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-            0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-            0xc67178f2,
-        ];
+    let compress = |state: &mut [u32; 8], block: &[u8]| {
         let mut w = [0u32; 64];
         for i in 0..16 {
             let j = i * 4;
-            w[i] = u32::from_be_bytes([
-                self.buf[j],
-                self.buf[j + 1],
-                self.buf[j + 2],
-                self.buf[j + 3],
-            ]);
+            w[i] = u32::from_be_bytes([block[j], block[j + 1], block[j + 2], block[j + 3]]);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
@@ -219,7 +250,7 @@ impl Sha256 {
                 .wrapping_add(w[i - 7])
                 .wrapping_add(s1);
         }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
         for i in 0..64 {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ ((!e) & g);
@@ -240,41 +271,24 @@ impl Sha256 {
             b = a;
             a = temp1.wrapping_add(temp2);
         }
-        self.state[0] = self.state[0].wrapping_add(a);
-        self.state[1] = self.state[1].wrapping_add(b);
-        self.state[2] = self.state[2].wrapping_add(c);
-        self.state[3] = self.state[3].wrapping_add(d);
-        self.state[4] = self.state[4].wrapping_add(e);
-        self.state[5] = self.state[5].wrapping_add(f);
-        self.state[6] = self.state[6].wrapping_add(g);
-        self.state[7] = self.state[7].wrapping_add(h);
-    }
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+        state[5] = state[5].wrapping_add(f);
+        state[6] = state[6].wrapping_add(g);
+        state[7] = state[7].wrapping_add(h);
+    };
 
-    fn finalize(mut self) -> [u8; 32] {
-        let bit_len = self.bit_len;
-        self.buf[self.buf_len] = 0x80;
-        self.buf_len += 1;
-        if self.buf_len > 56 {
-            // Fill and compress this block.
-            for i in self.buf_len..64 {
-                self.buf[i] = 0;
-            }
-            self.compress();
-            self.buf_len = 0;
-        }
-        // Zero remaining, write length in last 8 bytes.
-        for i in self.buf_len..56 {
-            self.buf[i] = 0;
-        }
-        let bl = bit_len.to_be_bytes();
-        self.buf[56..64].copy_from_slice(&bl);
-        self.compress();
-        let mut out = [0u8; 32];
-        for (i, &s) in self.state.iter().enumerate() {
-            out[i * 4..i * 4 + 4].copy_from_slice(&s.to_be_bytes());
-        }
-        out
+    for chunk in msg.chunks(64) {
+        compress(&mut state, chunk);
     }
+    let mut out = [0u8; 32];
+    for (i, &s) in state.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&s.to_be_bytes());
+    }
+    out
 }
 
 fn hex_lower(bytes: &[u8]) -> String {

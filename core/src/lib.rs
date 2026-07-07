@@ -22,7 +22,7 @@ pub mod metadata;
 mod reader;
 pub mod region;
 
-pub use backing::Backing;
+pub use backing::{Backing, ReadSeekSend};
 pub use error::{Result, VhdxError};
 pub use reader::VhdxReader;
 
