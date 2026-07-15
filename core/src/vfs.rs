@@ -9,6 +9,67 @@
 //! mutex — the same technique the engine's `SeekPoolSource` uses. Behind the
 //! `vfs` feature.
 
+use std::io::{Read, Seek, SeekFrom};
+use std::sync::{Mutex, PoisonError};
+
+use forensic_vfs::{ImageSource, VfsError, VfsResult};
+
+use crate::VhdxReader;
+
+/// A decoded [`VhdxReader`] presented as a read-only [`ImageSource`].
+///
+/// Construction records the virtual disk size once; `read_at` locks the reader,
+/// seeks, and fills the buffer. Because a VHDX read advances an internal cursor
+/// (`&mut self`), reads **serialize through the mutex** — correct and
+/// `Send + Sync`, at the cost of no intra-source read parallelism. The lock is
+/// poison-recovering, so one panicking reader does not wedge the source.
+pub struct VhdxSource {
+    inner: Mutex<VhdxReader>,
+    len: u64,
+}
+
+impl VhdxSource {
+    /// Wrap an open [`VhdxReader`], recording its virtual disk size as the source
+    /// length.
+    pub fn new(reader: VhdxReader) -> Self {
+        let len = reader.virtual_disk_size();
+        Self {
+            inner: Mutex::new(reader),
+            len,
+        }
+    }
+}
+
+impl ImageSource for VhdxSource {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+        let io_err = |op: &'static str| move |source: std::io::Error| VfsError::Io { op, source };
+        let avail = self.len.saturating_sub(offset);
+        if avail == 0 {
+            return Ok(0);
+        }
+        let want = (buf.len() as u64).min(avail) as usize;
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        guard
+            .seek(SeekFrom::Start(offset))
+            .map_err(io_err("vhdx::seek"))?;
+        let mut total = 0;
+        while total < want {
+            match guard
+                .read(&mut buf[total..want])
+                .map_err(io_err("vhdx::read"))?
+            {
+                0 => break,
+                n => total += n,
+            }
+        }
+        Ok(total)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Seek, SeekFrom};
