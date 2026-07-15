@@ -1,7 +1,7 @@
 //! Pluggable, positioned backing store for one VHDX container.
 //!
 //! The reader historically held the **entire image** in a `Vec<u8>` — a 2 TB
-//! VHDX meant a 2 TB heap. [`Backing`] generalises that to three positioned-read
+//! VHDX meant a 2 TB heap. [`Backing`] generalises that to four positioned-read
 //! backings WITHOUT a boxed trait, so the hot read path stays vtable-free (a
 //! `match` the compiler can inline, not a dynamic dispatch):
 //!
@@ -14,15 +14,29 @@
 //! - [`Backing::Mem`] — an in-RAM buffer (the legacy `from_bytes` path, or a
 //!   DEFLATED zip entry inflated to memory once): `read_at` copies from the
 //!   slice.
+//! - [`Backing::Reader`] — an arbitrary boxed [`ReadSeekSend`] reader (the
+//!   forensic-vfs engine path): `read_at` locks a mutex, seeks to the requested
+//!   offset, and reads — bridging the `Read + Seek` world to the positioned-read
+//!   API. Keeps `forbid(unsafe)` (no mmap).
 //!
-//! All three expose the same cursor-free, thread-safe positioned-read API
-//! (`read_at` + `len`), so the open/parse pass reads small structures from their
-//! known offsets and the data path reads just the resolved block — never the
-//! whole file.
+//! All four expose the same cursor-free positioned-read API (`read_at` + `len`),
+//! so the open/parse pass reads small structures from their known offsets and the
+//! data path reads just the resolved block — never the whole file.
 
 use std::fs::File;
-use std::io;
-use std::sync::Arc;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::sync::{Arc, Mutex};
+
+/// A boxed `Read + Seek + Send` reader that can be used as a [`Backing::Reader`].
+///
+/// Any type implementing `Read + Seek + Send` satisfies this trait via the blanket
+/// impl below. This is the trait [`VhdxReader::open_reader`] accepts so the
+/// forensic-vfs engine can hand a `SourceCursor` (which is `Read + Seek + Send`)
+/// straight to the VHDX parser without forensic-vfs appearing in the production
+/// dependency tree.
+pub trait ReadSeekSend: Read + Seek + Send {}
+
+impl<T: Read + Seek + Send> ReadSeekSend for T {}
 
 /// Fill `buf` from `file` starting at `offset`, returning the bytes read (short
 /// only at end of file).
@@ -79,6 +93,18 @@ pub enum Backing {
     /// An in-RAM container (e.g. the legacy `from_bytes` path or an inflated
     /// zip entry).
     Mem(Arc<[u8]>),
+    /// An arbitrary seekable reader (e.g. a forensic-vfs `SourceCursor`).
+    ///
+    /// The inner reader is `Read + Seek + Send` but not cursor-free: `read_at`
+    /// locks the mutex, seeks to the requested offset, then reads. Because the
+    /// lock is held only for the duration of one `read_at` call, this is safe
+    /// under `&self` — the mutex serialises concurrent accesses.
+    Reader {
+        /// The seekable reader, guarded by a mutex to satisfy `&self` [`Backing::read_at`].
+        inner: Mutex<Box<dyn ReadSeekSend>>,
+        /// Total byte length of the container, measured at construction.
+        len: u64,
+    },
 }
 
 impl Backing {
@@ -99,8 +125,8 @@ impl Backing {
     pub fn len(&self) -> u64 {
         match self {
             Backing::File(f) => f.metadata().map_or(0, |m| m.len()),
-            Backing::Sub { len, .. } => *len,
             Backing::Mem(b) => b.len() as u64,
+            Backing::Sub { len, .. } | Backing::Reader { len, .. } => *len,
         }
     }
 
@@ -138,6 +164,33 @@ impl Backing {
                 buf[..n].copy_from_slice(&src[..n]);
                 Ok(n)
             }
+            Backing::Reader { inner, len } => {
+                // Clamp to container bounds first — a read starting at or past
+                // EOF returns 0 cleanly, mirroring the other variants.
+                let avail = len.saturating_sub(offset);
+                if avail == 0 {
+                    return Ok(0);
+                }
+                let want = (buf.len() as u64).min(avail) as usize;
+                // Acquire the lock. A poisoned mutex means the reader is in an
+                // inconsistent state; surface that as an I/O error rather than
+                // panicking, so the caller can decide how to handle it.
+                let mut guard = inner
+                    .lock()
+                    .map_err(|_| io::Error::other("backing reader mutex poisoned"))?;
+                guard.seek(SeekFrom::Start(offset))?;
+                // Read in a loop to fill the buffer (mirroring pread semantics:
+                // short reads are only expected at EOF).
+                let dst = &mut buf[..want];
+                let mut total = 0;
+                while total < dst.len() {
+                    match guard.read(&mut dst[total..])? {
+                        0 => break, // EOF reached before filling the buffer.
+                        n => total += n,
+                    }
+                }
+                Ok(total)
+            }
         }
     }
 
@@ -168,6 +221,75 @@ impl std::fmt::Debug for Backing {
                 .field("len", len)
                 .finish(),
             Backing::Mem(b) => f.debug_struct("Mem").field("len", &b.len()).finish(),
+            Backing::Reader { len, .. } => f.debug_struct("Reader").field("len", len).finish(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::{Backing, ReadSeekSend};
+
+    /// Blanket impl: [`std::io::Cursor`]`<Vec<u8>>` satisfies [`ReadSeekSend`].
+    fn cursor_backing(data: Vec<u8>) -> Backing {
+        let len = data.len() as u64;
+        let inner = std::sync::Mutex::new(Box::new(Cursor::new(data)) as Box<dyn ReadSeekSend>);
+        Backing::Reader { inner, len }
+    }
+
+    #[test]
+    fn reader_backing_len_matches_construction() {
+        let b = cursor_backing(vec![1u8, 2, 3, 4, 5]);
+        assert_eq!(b.len(), 5);
+        assert!(!b.is_empty());
+    }
+
+    #[test]
+    fn reader_backing_read_at_fills_buf() {
+        let b = cursor_backing(vec![10, 20, 30, 40, 50]);
+        let mut buf = [0u8; 3];
+        let n = b.read_at(&mut buf, 1).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(buf, [20, 30, 40]);
+    }
+
+    #[test]
+    fn reader_backing_read_at_clamps_at_eof() {
+        let b = cursor_backing(vec![10, 20, 30]);
+        let mut buf = [0u8; 10];
+        let n = b.read_at(&mut buf, 1).unwrap();
+        assert_eq!(n, 2, "read past end should be clamped");
+        assert_eq!(&buf[..2], &[20, 30]);
+    }
+
+    #[test]
+    fn reader_backing_read_at_past_eof_returns_zero() {
+        let b = cursor_backing(vec![1, 2, 3]);
+        let mut buf = [0xFFu8; 4];
+        let n = b.read_at(&mut buf, 100).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn reader_backing_debug_does_not_panic() {
+        let b = cursor_backing(vec![0u8; 8]);
+        let s = format!("{b:?}");
+        assert!(s.contains("Reader"), "Debug output should name the variant");
+    }
+
+    #[test]
+    fn reader_backing_read_exact_at_works() {
+        let b = cursor_backing(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let v = b.read_exact_at(2, 4).unwrap();
+        assert_eq!(v, vec![2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn empty_reader_backing_is_empty() {
+        let b = cursor_backing(vec![]);
+        assert!(b.is_empty());
+        assert_eq!(b.len(), 0);
     }
 }
