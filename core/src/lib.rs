@@ -21,6 +21,8 @@ mod log;
 pub mod metadata;
 mod reader;
 pub mod region;
+#[cfg(feature = "vfs")]
+mod vfs;
 
 pub use backing::{Backing, ReadSeekSend};
 pub use error::{Result, VhdxError};
