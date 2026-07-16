@@ -28,7 +28,7 @@ forensic-vfs = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-forensic-vfs = "0.1"
+forensic-vfs = "0.3"
 
 [lints]
 workspace = true
