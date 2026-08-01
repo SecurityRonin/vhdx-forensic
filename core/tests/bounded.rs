@@ -36,9 +36,12 @@ fn read_full(reader: &mut VhdxReader, size: usize) -> Vec<u8> {
 }
 
 fn assert_open_matches_from_bytes(path: &Path) {
-    if !path.exists() {
-        return;
-    }
+    // Fixtures under tests/data/ are committed, so absence is a broken checkout.
+    assert!(
+        path.exists(),
+        "committed fixture missing: {}",
+        path.display()
+    );
 
     // Oracle: legacy whole-file path.
     let bytes = std::fs::read(path).expect("read file bytes");
