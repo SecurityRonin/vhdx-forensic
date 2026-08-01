@@ -1,19 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+use forensic_testgate::gated_file;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
 use vhdx::VhdxReader;
-
-fn corpus_dir() -> Option<PathBuf> {
-    std::env::var("CORPUS_DIR").ok().map(PathBuf::from)
-}
 
 #[test]
 fn corpus_dynamic_vhdx_opens_and_has_nonzero_size() {
-    let Some(dir) = corpus_dir() else { return };
-    let path = dir.join("dynamic.vhdx");
-    if !path.exists() {
+    let Some(path) = gated_file("CORPUS_DIR", "dynamic.vhdx") else {
         return;
-    }
+    };
     let reader = VhdxReader::open(&path).expect("open dynamic.vhdx");
     assert!(
         reader.virtual_disk_size() > 0,
@@ -23,11 +17,9 @@ fn corpus_dynamic_vhdx_opens_and_has_nonzero_size() {
 
 #[test]
 fn corpus_dynamic_vhdx_read_is_stable() {
-    let Some(dir) = corpus_dir() else { return };
-    let path = dir.join("dynamic.vhdx");
-    if !path.exists() {
+    let Some(path) = gated_file("CORPUS_DIR", "dynamic.vhdx") else {
         return;
-    }
+    };
     let mut reader = VhdxReader::open(&path).expect("open");
     let mut buf = [0u8; 512];
     reader.seek(SeekFrom::Start(0)).expect("seek");

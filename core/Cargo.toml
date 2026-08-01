@@ -27,6 +27,11 @@ thiserror = { workspace = true }
 forensic-vfs = { version = "0.3", optional = true }
 
 [dev-dependencies]
+# TODO(before merge): must become `forensic-testgate = "0.1"` once published. A
+# cross-repo path dependency resolves locally but breaks every tool that clones the
+# repo alone — release-plz, `cargo package`, `cargo publish --dry-run`. It must not
+# reach main.
+forensic-testgate = { path = "/Users/4n6h4x0r/.claude/jobs/6125d941/tmp/forensic-testgate" }
 tempfile = { workspace = true }
 forensic-vfs = "0.3"
 
