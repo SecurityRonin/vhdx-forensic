@@ -22,7 +22,13 @@ vhdx = { workspace = true }
 tempfile = { workspace = true }
 
 [lints.clippy]
+all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+correctness = "deny"
+suspicious = "deny"
+
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
@@ -42,4 +48,5 @@ if_not_else = "allow"
 manual_range_contains = "allow"
 
 [lints.rust]
+unsafe_code = "forbid"
 dead_code = "allow"
