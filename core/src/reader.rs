@@ -3,7 +3,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::backing::{Backing, ReadSeekSend};
-use crate::bat::Bat;
+use crate::bat::{Bat, ReadTarget};
 use crate::error::{Result, VhdxError};
 use crate::header::{parse_active_header, REGION_TABLE1_OFFSET, REGION_TABLE2_OFFSET};
 use crate::log::LogOverlay;
@@ -237,37 +237,83 @@ impl Read for VhdxReader {
         while written < to_read {
             let virtual_byte = self.pos + written as u64;
             let block_end = ((virtual_byte / block_size) + 1) * block_size;
-            let this_chunk = (to_read - written).min((block_end - virtual_byte) as usize);
+            let mut this_chunk = (to_read - written).min((block_end - virtual_byte) as usize);
 
-            match self.bat.file_offset_for_byte(virtual_byte) {
-                Ok(file_off) => {
-                    let dst = &mut buf[written..written + this_chunk];
-                    let n = self.backing.read_at(dst, file_off)?;
-                    if n < this_chunk {
+            match self
+                .bat
+                .read_target_for_byte(virtual_byte)
+                .map_err(|e| io::Error::other(e.to_string()))?
+            {
+                ReadTarget::File(file_offset) => {
+                    self.read_file_chunk(&mut buf[written..written + this_chunk], file_offset)?;
+                }
+                ReadTarget::Fallback => {
+                    self.read_fallback_chunk(
+                        &mut buf[written..written + this_chunk],
+                        virtual_byte,
+                    )?;
+                }
+                ReadTarget::Partial {
+                    file_offset,
+                    bitmap_byte_file_offset,
+                    bitmap_mask,
+                } => {
+                    let logical_sector_size = u64::from(self.meta.logical_sector_size);
+                    let sector_end =
+                        ((virtual_byte / logical_sector_size) + 1) * logical_sector_size;
+                    this_chunk = this_chunk.min((sector_end - virtual_byte) as usize);
+
+                    let mut bitmap = [0u8; 1];
+                    let n = self.backing.read_at(&mut bitmap, bitmap_byte_file_offset)?;
+                    if n < bitmap.len() {
                         return Err(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
-                            "VHDX data truncated",
+                            "VHDX sector bitmap truncated",
                         ));
                     }
-                    // Fold any committed-log sectors over the on-disk block.
-                    self.overlay.patch(dst, file_off);
-                }
-                Err(VhdxError::BlockNotPresent(_)) => {
-                    if let Some(ref mut p) = self.parent {
-                        p.seek(SeekFrom::Start(virtual_byte))
-                            .map_err(io::Error::other)?;
-                        p.read_exact(&mut buf[written..written + this_chunk])?;
+                    self.overlay.patch(&mut bitmap, bitmap_byte_file_offset);
+
+                    if bitmap[0] & bitmap_mask != 0 {
+                        self.read_file_chunk(&mut buf[written..written + this_chunk], file_offset)?;
                     } else {
-                        buf[written..written + this_chunk].fill(0);
+                        self.read_fallback_chunk(
+                            &mut buf[written..written + this_chunk],
+                            virtual_byte,
+                        )?;
                     }
                 }
-                Err(e) => return Err(io::Error::other(e.to_string())),
             }
             written += this_chunk;
         }
 
         self.pos += written as u64;
         Ok(written)
+    }
+}
+
+impl VhdxReader {
+    fn read_file_chunk(&self, dst: &mut [u8], file_offset: u64) -> io::Result<()> {
+        let n = self.backing.read_at(dst, file_offset)?;
+        if n < dst.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "VHDX data truncated",
+            ));
+        }
+        self.overlay.patch(dst, file_offset);
+        Ok(())
+    }
+
+    fn read_fallback_chunk(&mut self, dst: &mut [u8], virtual_byte: u64) -> io::Result<()> {
+        if let Some(ref mut parent) = self.parent {
+            parent
+                .seek(SeekFrom::Start(virtual_byte))
+                .map_err(io::Error::other)?;
+            parent.read_exact(dst)
+        } else {
+            dst.fill(0);
+            Ok(())
+        }
     }
 }
 

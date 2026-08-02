@@ -26,6 +26,8 @@ pub enum VhdxError {
     SectorOutOfRange { sector: u64, size: u64 },
     #[error("BAT entry not present for sector {0}")]
     BlockNotPresent(u64),
+    #[error("sector bitmap BAT entry is not present for partial payload block {0}")]
+    SectorBitmapNotPresent(u64),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("VHDX has a parent locator (differencing disk not supported)")]
