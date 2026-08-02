@@ -147,6 +147,8 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 [[package]]
 name = "forensic-testgate"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88996536dec2f0de4cd137f4ad0e0c0009f65df58e54e27c11f741b0887ff10c"
 
 [[package]]
 name = "forensic-vfs"
