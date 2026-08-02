@@ -2,3 +2,9 @@
 # cargo-vet audits file
 
 [audits]
+
+[[trusted.forensic-testgate]]
+criteria = "safe-to-run"
+user-id = 347968 # Albert Hui (h4x0r)
+start = "2026-08-02"
+end = "2027-08-02"
