@@ -39,6 +39,11 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      # qemu-img is the oracle for core/tests/corpus_differential.rs. Without it
+      # installed the differential resolves no binary and silently no-ops, so the
+      # reader is never cross-validated in CI.
+      - name: Install qemu-img
+        run: sudo apt-get update && sudo apt-get install -y qemu-utils
       - run: cargo test
 
   msrv:

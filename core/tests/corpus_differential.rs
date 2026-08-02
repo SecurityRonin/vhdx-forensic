@@ -1,24 +1,63 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 /// Corpus differential tests: bytes from `VhdxReader` must match `qemu-img convert -O raw`.
 ///
-/// These tests skip automatically if qemu-img is not installed, so they run in CI
-/// only on machines with QEMU available (the dev machine). They verify correctness
-/// against an independent authoritative reference rather than against the library's
-/// own synthetic fixtures (which share the same blind spots).
+/// These tests skip automatically if qemu-img is not installed. They verify
+/// correctness against an independent authoritative reference rather than against
+/// the library's own synthetic fixtures (which share the same blind spots).
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::process::Command;
 use vhdx::VhdxReader;
 
-const QEMU_IMG: &str = "/opt/homebrew/bin/qemu-img";
+/// Resolve a usable `qemu-img`, or `None` (the differential then skips).
+///
+/// `PATH` is probed first, so any install location works — including ones a
+/// fixed list cannot anticipate: another package manager's prefix, or a
+/// hand-built install. The absolute
+/// candidates are the fallback for a stripped `PATH`: Homebrew on Apple silicon
+/// and Intel, then `/usr/bin`, where the Linux CI runner's `qemu-utils` package
+/// lands it. `QEMU_IMG_BIN` overrides both.
+///
+/// The hardcoded Homebrew path this replaces resolved only on a macOS-arm64 dev
+/// machine, which is why the doc comment above used to concede these ran "only
+/// on machines with QEMU available (the dev machine)".
+fn qemu_img_bin() -> Option<String> {
+    if let Ok(explicit) = std::env::var("QEMU_IMG_BIN") {
+        return usable(&explicit);
+    }
+    [
+        "qemu-img",
+        "/opt/homebrew/bin/qemu-img",
+        "/usr/local/bin/qemu-img",
+        "/usr/bin/qemu-img",
+    ]
+    .into_iter()
+    .find_map(usable)
+}
+
+/// A candidate counts only if it actually executes: a successful `--version`
+/// proves both that the name resolved and that the binary runs on this host,
+/// which a bare `Path::exists()` check does not.
+fn usable(candidate: &str) -> Option<String> {
+    Command::new(candidate)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|_| candidate.to_string())
+}
 
 fn corpus_vhdx_matches_qemu_raw(corpus: &Path) {
-    if !Path::new(QEMU_IMG).exists() || !corpus.exists() {
+    let Some(qemu_img) = qemu_img_bin() else {
+        return;
+    };
+    if !corpus.exists() {
         return;
     }
     let tmp = tempfile::tempdir().expect("tempdir");
     let raw_path = tmp.path().join("reference.raw");
 
-    let ok = std::process::Command::new(QEMU_IMG)
+    let ok = Command::new(&qemu_img)
         .args([
             "convert",
             "-O",
