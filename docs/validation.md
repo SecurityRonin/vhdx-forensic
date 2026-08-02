@@ -98,10 +98,15 @@ On the dfvfs differencing image (`fat-differential.vhdx`, which references
 `core/tests/differential.rs::from_bytes_still_refuses_differencing_disk` confirm
 `from_bytes` refuses a child with no parent (preventing silent data loss);
 `core/tests/differential.rs` confirms `from_bytes_with_parent` opens the chain,
-reads sector 0, and reports the parent's virtual size. `VhdxIntegrity` still
-analyses the raw child and emits `DifferencingDisk` (Warning), asserted in
-`libvhdi_compat.rs`. The fixtures are independently created; the expected
-behaviour follows from the differencing-disk format.
+reads sector 0, and reports the parent's virtual size. The same test reads three
+sectors across the child's first partially-present payload block: bitmap sectors
+133 and 135 resolve to the parent, while sector 134 resolves to the child and
+contains the corpus byte `0xff` at virtual offset `0x10c06`. This prevents a
+partial block from being incorrectly collapsed to the parent as a whole.
+`VhdxIntegrity` still analyses the raw child and emits `DifferencingDisk`
+(Warning), asserted in `libvhdi_compat.rs`. The fixtures are independently
+created; the expected behaviour follows from the differencing-disk format and
+its sector bitmap.
 
 ### Legacy-VHD rejection — Tier 1 input
 
