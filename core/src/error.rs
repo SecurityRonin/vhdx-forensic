@@ -24,8 +24,10 @@ pub enum VhdxError {
     AddressOverflow,
     #[error("sector out of range (sector {sector}, virtual disk size {size})")]
     SectorOutOfRange { sector: u64, size: u64 },
-    #[error("BAT entry not present for sector {0}")]
+    #[error("BAT entry not present for payload block {0}")]
     BlockNotPresent(u64),
+    #[error("invalid payload BAT state {state} for block {block}")]
+    InvalidPayloadBlockState { block: u64, state: u8 },
     #[error("sector bitmap BAT entry is not present for partial payload block {0}")]
     SectorBitmapNotPresent(u64),
     #[error("I/O error: {0}")]
