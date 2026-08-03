@@ -103,6 +103,22 @@ sectors across the child's first partially-present payload block: bitmap sectors
 133 and 135 resolve to the parent, while sector 134 resolves to the child and
 contains the corpus byte `0xff` at virtual offset `0x10c06`. This prevents a
 partial block from being incorrectly collapsed to the parent as a whole.
+`bulk_read_of_partial_block_matches_sector_at_a_time` reads 96 sectors spanning
+the same block in one call and asserts the result is byte-identical to resolving
+each sector individually, so serving a run of same-owner sectors per bitmap byte
+cannot change what is read.
+
+Every block in this fixture lives in chunk 0, which reduces the chunk arithmetic
+to multiplication by zero. `core/src/bat.rs::tests` therefore drives a synthetic
+BAT at the largest legal block size (256 MB, chunk ratio 16) so payload and
+sector-bitmap entries resolve in chunk 1: block 17 is BAT index 18 and its chunk
+bitmap is index 33. The same tests pin the payload-state routing — only
+`PAYLOAD_BLOCK_NOT_PRESENT` defers to the parent, while `PAYLOAD_BLOCK_UNDEFINED`,
+`PAYLOAD_BLOCK_ZERO`, and `PAYLOAD_BLOCK_UNMAPPED` read as zeros, since consulting
+the parent for a block the child describes as empty would resurrect replaced data.
+A BAT too short to describe a block is treated as not-present rather than failing
+the read.
+
 `VhdxIntegrity` still analyses the raw child and emits `DifferencingDisk`
 (Warning), asserted in `libvhdi_compat.rs`. The fixtures are independently
 created; the expected behaviour follows from the differencing-disk format and
