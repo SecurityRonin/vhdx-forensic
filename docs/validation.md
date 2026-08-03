@@ -116,8 +116,9 @@ bitmap is index 33. The same tests pin the payload-state routing — only
 `PAYLOAD_BLOCK_NOT_PRESENT` defers to the parent, while `PAYLOAD_BLOCK_UNDEFINED`,
 `PAYLOAD_BLOCK_ZERO`, and `PAYLOAD_BLOCK_UNMAPPED` read as zeros, since consulting
 the parent for a block the child describes as empty would resurrect replaced data.
-A BAT too short to describe a block is treated as not-present rather than failing
-the read.
+Reserved payload states 4 and 5 are rejected as malformed rather than silently
+producing zero data. A BAT too short to describe a requested payload block is
+also an error instead of being treated as parent-backed.
 
 `VhdxIntegrity` still analyses the raw child and emits `DifferencingDisk`
 (Warning), asserted in `libvhdi_compat.rs`. The fixtures are independently
