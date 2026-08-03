@@ -57,6 +57,38 @@ fn partially_present_block_routes_each_sector_by_bitmap() {
     );
 }
 
+/// The reader serves a whole run of same-owner sectors per sector-bitmap byte.
+/// A bulk read spanning many runs must be byte-identical to resolving one
+/// sector at a time, which is the unbatched reference behaviour.
+#[test]
+fn bulk_read_of_partial_block_matches_sector_at_a_time() {
+    const SECTOR_SIZE: usize = 512;
+    const SECTORS: usize = 96;
+    const START: u64 = 100 * SECTOR_SIZE as u64;
+
+    fn child() -> VhdxReader {
+        let parent = VhdxReader::from_bytes(data("fat-parent.vhdx")).expect("parent opens");
+        VhdxReader::from_bytes_with_parent(data("fat-differential.vhdx"), parent)
+            .expect("differential opens")
+    }
+
+    let mut bulk = vec![0u8; SECTORS * SECTOR_SIZE];
+    let mut reader = child();
+    reader.seek(SeekFrom::Start(START)).expect("bulk seek");
+    reader.read_exact(&mut bulk).expect("bulk read");
+
+    let mut reference = vec![0u8; SECTORS * SECTOR_SIZE];
+    let mut reader = child();
+    for (i, sector) in reference.chunks_mut(SECTOR_SIZE).enumerate() {
+        reader
+            .seek(SeekFrom::Start(START + (i * SECTOR_SIZE) as u64))
+            .expect("sector seek");
+        reader.read_exact(sector).expect("sector read");
+    }
+
+    assert_eq!(bulk, reference);
+}
+
 #[test]
 fn fat_differential_virtual_disk_size_matches_parent() {
     let parent_bytes = data("fat-parent.vhdx");

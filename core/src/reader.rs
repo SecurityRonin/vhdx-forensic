@@ -247,22 +247,17 @@ impl Read for VhdxReader {
                 ReadTarget::File(file_offset) => {
                     self.read_file_chunk(&mut buf[written..written + this_chunk], file_offset)?;
                 }
-                ReadTarget::Fallback => {
-                    self.read_fallback_chunk(
-                        &mut buf[written..written + this_chunk],
-                        virtual_byte,
-                    )?;
+                ReadTarget::Parent => {
+                    self.read_parent_chunk(&mut buf[written..written + this_chunk], virtual_byte)?;
+                }
+                ReadTarget::Zero => {
+                    buf[written..written + this_chunk].fill(0);
                 }
                 ReadTarget::Partial {
                     file_offset,
                     bitmap_byte_file_offset,
-                    bitmap_mask,
+                    bitmap_bit,
                 } => {
-                    let logical_sector_size = u64::from(self.meta.logical_sector_size);
-                    let sector_end =
-                        ((virtual_byte / logical_sector_size) + 1) * logical_sector_size;
-                    this_chunk = this_chunk.min((sector_end - virtual_byte) as usize);
-
                     let mut bitmap = [0u8; 1];
                     let n = self.backing.read_at(&mut bitmap, bitmap_byte_file_offset)?;
                     if n < bitmap.len() {
@@ -273,10 +268,30 @@ impl Read for VhdxReader {
                     }
                     self.overlay.patch(&mut bitmap, bitmap_byte_file_offset);
 
-                    if bitmap[0] & bitmap_mask != 0 {
+                    // One bitmap byte describes eight consecutive logical
+                    // sectors, and byte boundaries never straddle a block
+                    // because sectors-per-block is always a multiple of eight.
+                    // Serve the whole run of following sectors that share this
+                    // sector's owner, so a partial block costs one bitmap read
+                    // per run rather than one per sector.
+                    let owned_by_child = bitmap[0] & (1 << bitmap_bit) != 0;
+                    let mut run_sectors = 1u64;
+                    for bit in (bitmap_bit + 1)..8 {
+                        if (bitmap[0] & (1 << bit) != 0) != owned_by_child {
+                            break;
+                        }
+                        run_sectors += 1;
+                    }
+
+                    let logical_sector_size = u64::from(self.meta.logical_sector_size);
+                    let run_end =
+                        ((virtual_byte / logical_sector_size) + run_sectors) * logical_sector_size;
+                    this_chunk = this_chunk.min((run_end - virtual_byte) as usize);
+
+                    if owned_by_child {
                         self.read_file_chunk(&mut buf[written..written + this_chunk], file_offset)?;
                     } else {
-                        self.read_fallback_chunk(
+                        self.read_parent_chunk(
                             &mut buf[written..written + this_chunk],
                             virtual_byte,
                         )?;
@@ -304,7 +319,9 @@ impl VhdxReader {
         Ok(())
     }
 
-    fn read_fallback_chunk(&mut self, dst: &mut [u8], virtual_byte: u64) -> io::Result<()> {
+    /// Serve bytes this image does not describe: from the parent when there is
+    /// one, otherwise zeros.
+    fn read_parent_chunk(&mut self, dst: &mut [u8], virtual_byte: u64) -> io::Result<()> {
         if let Some(ref mut parent) = self.parent {
             parent
                 .seek(SeekFrom::Start(virtual_byte))
