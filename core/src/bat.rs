@@ -74,18 +74,15 @@ impl Bat {
 
         let bat_index = data_block_index + data_block_index / chunk_ratio;
 
-        // A BAT too short to describe this block is treated exactly like
-        // PAYLOAD_BLOCK_NOT_PRESENT, preserving the reader's long-standing
-        // behaviour on short or truncated BAT regions.
-        let Some(&bat_entry) = self.entries.get(bat_index as usize) else {
-            return Ok(ReadTarget::Parent);
-        };
+        let bat_entry = *self
+            .entries
+            .get(bat_index as usize)
+            .ok_or(VhdxError::BlockNotPresent(data_block_index))?;
 
         // Only PAYLOAD_BLOCK_NOT_PRESENT defers to the parent image. States 1-3
         // are this image asserting the block has no meaningful contents, so
         // reading the parent there would resurrect data the child replaced.
-        // States 4 and 5 are reserved; treat them as undefined rather than
-        // trusting the file offset (MS-VHDX 2.3.5).
+        // States 4 and 5 are reserved and therefore malformed (MS-VHDX 2.3.5).
         let state = bat_entry & 0b111;
         match state {
             PAYLOAD_BLOCK_NOT_PRESENT => return Ok(ReadTarget::Parent),
@@ -93,7 +90,12 @@ impl Bat {
                 return Ok(ReadTarget::Zero)
             }
             PAYLOAD_BLOCK_FULLY_PRESENT | PAYLOAD_BLOCK_PARTIALLY_PRESENT => {}
-            _ => return Ok(ReadTarget::Zero),
+            _ => {
+                return Err(VhdxError::InvalidPayloadBlockState {
+                    block: data_block_index,
+                    state: state as u8,
+                })
+            }
         }
 
         let file_offset = (bat_entry >> 20)
@@ -231,15 +233,33 @@ mod tests {
     }
 
     #[test]
+    fn reserved_payload_states_are_errors() {
+        for state in [4u64, 5] {
+            let mut entries = vec![0u64; 34];
+            entries[18] = entry(100, state);
+
+            let target = bat(entries).read_target_for_byte(17 * BLOCK);
+
+            assert!(matches!(
+                target,
+                Err(VhdxError::InvalidPayloadBlockState {
+                    block: 17,
+                    state: raw_state,
+                }) if raw_state == state as u8
+            ));
+        }
+    }
+
+    #[test]
     fn not_present_state_defers_to_parent() {
         assert_eq!(target_of(vec![0u64; 34], 17 * BLOCK), ReadTarget::Parent);
     }
 
-    /// A BAT too short to describe the block behaves like a not-present entry
-    /// rather than failing the whole read.
     #[test]
-    fn short_bat_defers_to_parent() {
-        assert_eq!(target_of(vec![0u64; 4], 17 * BLOCK), ReadTarget::Parent);
+    fn short_bat_is_an_error() {
+        let target = bat(vec![0u64; 4]).read_target_for_byte(17 * BLOCK);
+
+        assert!(matches!(target, Err(VhdxError::BlockNotPresent(17))));
     }
 
     #[test]
