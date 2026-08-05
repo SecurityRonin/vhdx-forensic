@@ -15,7 +15,7 @@ repository = "https://github.com/SecurityRonin/vhdx-forensic"
 # members write `dep.workspace = true`. The inter-crate `vhdx` version lives here
 # too (requirement unchanged at 0.2.0), so a bump touches one line.
 [workspace.dependencies]
-vhdx = { path = "core", version = "0.3.0", package = "vhdx-core" }
+vhdx = { path = "core", version = "0.4.0", package = "vhdx-core" }
 thiserror = "2"
 forensicnomicon = "1"
 clap = { version = "4", features = ["derive"] }
