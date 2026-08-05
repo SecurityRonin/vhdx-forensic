@@ -1,6 +1,6 @@
 [package]
 name = "vhdx-core"
-version = "0.3.1"
+version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "Pure-Rust VHDX (Hyper-V) virtual-disk container library — reader (writer planned), hardened for forensic use"
