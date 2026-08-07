@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 /// A boxed `Read + Seek + Send` reader that can be used as a [`Backing::Reader`].
 ///
 /// Any type implementing `Read + Seek + Send` satisfies this trait via the blanket
-/// impl below. This is the trait [`VhdxReader::open_reader`] accepts so the
+/// impl below. This is the trait [`crate::VhdxReader::open_reader`] accepts so the
 /// forensic-vfs engine can hand a `SourceCursor` (which is `Read + Seek + Send`)
 /// straight to the VHDX parser without forensic-vfs appearing in the production
 /// dependency tree.
