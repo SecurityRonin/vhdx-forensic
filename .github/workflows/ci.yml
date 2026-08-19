@@ -38,20 +38,3 @@ jobs:
       # the number up. 83 is therefore a conservative floor, not a ceiling.
       coverage-gate: floor
       coverage-floor: 83
-
-  # Repo-specific reporting, copied verbatim from the old ci.yml. Not a gate
-  # (continue-on-error), so it stays outside the shared workflow.
-  geiger:
-    name: Unsafe Audit (cargo-geiger)
-    runs-on: ubuntu-latest
-    # Reporting only — transitive deps (e.g. crc32fast SIMD) use unsafe legitimately.
-    # Review the output; a spike vs baseline warrants investigation.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-        with:
-          cache-on-failure: true
-      - run: cargo install cargo-geiger --locked
-      - run: cargo geiger 2>&1 || true
